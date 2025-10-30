@@ -47,43 +47,30 @@ process_luminex_data <- function(raw_data, patient_mapping, pre_threshold = -1) 
   # add target using the patient mapping
   ratio_df$Target <- patient_mapping$mapped_target[match(rownames(ratio_df), patient_mapping$id_patient)]
   
-  # Dataset 2: Last Infection (max days since infection)
-  last_infection <- raw_data %>%
+  # Dataset 2: Last draw (ie draw at max days since infection)
+  cross_sectional_data <- raw_data %>%
     group_by(id_patient) %>%
     filter(days_since_infection == max(days_since_infection, na.rm = TRUE)) %>%
     ungroup()
-  last_infection  <- last_infection  |> as.data.frame()
-  rownames(last_infection) <- last_infection$id_patient
+  cross_sectional_data  <- cross_sectional_data  |> as.data.frame()
+  rownames(cross_sectional_data) <- cross_sectional_data$id_patient
   # Keep patient ID, Target, and antigen columns
-  last_infection$Target <- patient_mapping$mapped_target[match(rownames(last_infection), patient_mapping$id_patient)]
+  cross_sectional_data$Target <- patient_mapping$mapped_target[match(rownames(cross_sectional_data), patient_mapping$id_patient)]
 
-  # Dataset 3: First Infection (min days > 0)
-  first_infection <- raw_data %>%
-    filter(days_since_infection > 0) %>%
-    group_by(id_patient) %>%
-    filter(days_since_infection == min(days_since_infection, na.rm = TRUE)) %>%
-    ungroup()
-  first_infection <- first_infection |> as.data.frame()
-  rownames(first_infection) <- first_infection$id_patient
-  first_infection$Target <- patient_mapping$mapped_target[match(rownames(first_infection), patient_mapping$id_patient)]
-  
 
   # Remove metadata columns not required for further analysis
-  last_infection$days_since_infection  <- NULL
-  last_infection$id_patient <- NULL
-  last_infection$HAI_DENV1 <- NULL
-  last_infection$HAI_DENV2 <- NULL
-  last_infection$HAI_DENV3 <- NULL
-  last_infection$HAI_DENV4 <- NULL
+  cross_sectional_data$days_since_infection  <- NULL
+  cross_sectional_data$id_patient <- NULL
+  cross_sectional_data$HAI_DENV1 <- NULL
+  cross_sectional_data$HAI_DENV2 <- NULL
+  cross_sectional_data$HAI_DENV3 <- NULL
+  cross_sectional_data$HAI_DENV4 <- NULL
   
-  first_infection$days_since_infection <- NULL
-  first_infection$id_patient <- NULL
-  
+ 
   # Return all three datasets as a list
   return(list(
     ratio = ratio_df,
-    last_infection = last_infection,
-    first_infection = first_infection
+    cross_sectional_data = cross_sectional_data
   ))
 }
 
