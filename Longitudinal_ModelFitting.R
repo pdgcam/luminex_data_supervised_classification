@@ -28,10 +28,10 @@ library(PRROC)
 library(here)
 
 # --- source functions ----
-source(here('/Users/ap2488/Desktop/supervised_learning_flavi/new_code_scripts/Functions.R'))
+source(here('Functions.R'))
 
 # ---- Import prepossessed datasets ---- 
-preprocessed_data <- readRDS("/Users/ap2488/Desktop/supervised_learning_flavi/preprocessed_data/luminex_processed_data.rds")
+preprocessed_data <- readRDS("luminex_processed_data.rds")
 
 # If using already preprocessed data, skip this 
 # Extract ratio data (longitudinal analysis)
