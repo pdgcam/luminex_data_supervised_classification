@@ -4,14 +4,14 @@
 source(here('Functions.R'))
 
 # extract last infection (cross-sectional) data
-last_infection_data <- preprocessed_data$last_infection
+cross_sectional_data <- preprocessed_data$cross_sectional_data
 # Drop rows with any NA
-last_infection_data <- na.omit(last_infection_data)
-table(last_infection_data$Target)
+cross_sectional_data <- na.omit(cross_sectional_data)
+table(cross_sectional_data$Target)
 
 # ---- Select binomial targets / classification questions  ----
 cross_sectional_data_with_binomial_targets <- select_targets(
-  preprocessed_data = last_infection_data,
+  preprocessed_data = cross_sectional_data,
   targets = c("flavi", "dengue"),
   drop_original_target = TRUE
 )
@@ -35,7 +35,7 @@ cross_sectional_binomial_modeling_results <- train_multiple_targets(
 
 # ---- Select multinomial targets  ----
 cross_sectional_data_with_multinomial_targets <- select_targets(
-  preprocessed_data = last_infection_data,
+  preprocessed_data = cross_sectional_data,
   targets = c("dengue_serotype", "dengue_serotype_neg"),
   drop_original_target = TRUE
 )
@@ -65,7 +65,7 @@ cross_sectional_multinomial_modeling_dengue_serotype_neg <- train_multinomial_mo
 
 # ---- Run univariate analysis ---- 
 # Get dengue and zika variables (or variable of choice) 
-serotype_vars <- grep("DENV|ZIKV", names(last_infection_data), value = TRUE)
+serotype_vars <- grep("DENV|ZIKV", names(cross_sectional_data), value = TRUE)
 
 cross_sectional_univariate_results <- train_multiple_targets_univariate(
   data_list = cross_sectional_data_with_binomial_targets,
