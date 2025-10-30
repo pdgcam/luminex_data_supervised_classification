@@ -74,8 +74,8 @@ cross_sectional_univariate_results <- train_multiple_targets_univariate(
 )
 
 # ---- Save all results ----
-saveRDS(cross_sectional_binomial_modeling_results, here("Desktop/supervised_learning_flavi/Model_Results/cross_sectional_binomial_modeling_results.rds"))
-saveRDS(cross_sectional_multinomial_modeling_dengue_serotype, here("Desktop/supervised_learning_flavi/Model_Results/cross_sectional_multinomial_modeling_dengue_serotype.rds"))
-saveRDS(cross_sectional_multinomial_modeling_dengue_serotype_neg, here("Desktop/supervised_learning_flavi/Model_Results/cross_sectional_multinomial_modeling_dengue_serotype_neg.rds"))
+saveRDS(cross_sectional_binomial_modeling_results, here("cross_sectional_binomial_modeling_results.rds"))
+saveRDS(cross_sectional_multinomial_modeling_dengue_serotype, here("cross_sectional_multinomial_modeling_dengue_serotype.rds"))
+saveRDS(cross_sectional_multinomial_modeling_dengue_serotype_neg, here("cross_sectional_multinomial_modeling_dengue_serotype_neg.rds"))
 write_csv(cross_sectional_univariate_results$combined_comparison, 
-          here("Desktop/supervised_learning_flavi/Model_Results/cross_sectional_univariate_results.csv"))
+          here("cross_sectional_univariate_results.csv"))
