@@ -1,4 +1,4 @@
-# ----- Script to fit to Binary and Multinational models to longitudinal (post /pre ratio) lumindex data ----- #
+# ----- Script to fit to Binary and Multinational models using longitudinal (post /pre ratio) data ----- #
 
 # ---- Import librarys 
 library(tidyverse)
