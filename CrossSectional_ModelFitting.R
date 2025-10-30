@@ -1,4 +1,6 @@
-#--- source functions
+# ---- Script for Cross-sectional analysing, using the last blood draw samples
+
+# --- source functions
 source(here('Functions.R'))
 
 # extract last infection (cross-sectional) data
