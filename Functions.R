@@ -814,7 +814,8 @@ train_multiple_targets <- function(
         data = current_data,
         target = target_col,
         variables = variables,
-        n_repeats = n_repeats
+        k_fold = "LOOCV", 
+        metrics = metrics
       )
       
       # Store results
