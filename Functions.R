@@ -495,22 +495,22 @@ train_multinomial_models <- function(
     }
     
     # Ensure factors for confusion matrix
-    y_true <- factor(y_true, levels = lev)  # Changed from class_levels to lev
-    y_pred <- factor(y_pred, levels = lev)  # Changed from class_levels to lev
+    y_true <- factor(y_true, levels = lev)  
+    y_pred <- factor(y_pred, levels = lev)  
     
     # Accuracy
     acc <- mean(y_pred == y_true, na.rm = TRUE)
     
     # One-vs-Rest metrics for each class
-    auc_per_class   <- numeric(length(lev))  # Changed from class_levels to lev
-    auprc_per_class <- numeric(length(lev))  # Changed from class_levels to lev
+    auc_per_class   <- numeric(length(lev))  
+    auprc_per_class <- numeric(length(lev))  lev
     
-    # For micro-averaging AUC/AUPRC
+    # micro-averaging AUC/AUPRC
     all_y_binary <- c()
     all_p_class  <- c()
     
-    for (k in seq_along(lev)) {  # Changed from class_levels to lev
-      class_k  <- lev[k]  # Changed from class_levels to lev
+    for (k in seq_along(lev)) {  
+      class_k  <- lev[k]  
       y_binary <- as.integer(y_true == class_k)
       p_class  <- y_proba[, k]
       
@@ -556,19 +556,19 @@ train_multinomial_models <- function(
     }, error = function(e) NA_real_)
     
     # ---- Multi-class Brier Score ----
-    y_true_matrix <- matrix(0, nrow = length(y_true), ncol = length(lev))  # Changed
-    colnames(y_true_matrix) <- lev  # Changed
-    for (k in seq_along(lev)) {  # Changed
-      y_true_matrix[, k] <- as.integer(y_true == lev[k])  # Changed
+    y_true_matrix <- matrix(0, nrow = length(y_true), ncol = length(lev))  
+    colnames(y_true_matrix) <- lev  
+    for (k in seq_along(lev)) {  
+      y_true_matrix[, k] <- as.integer(y_true == lev[k])  
     }
-    # Standard multi-class Brier:
+    # multi-class Brier:
     brier <- mean((y_proba - y_true_matrix)^2)
     
     # ---- Stratified Brier (class-weighted) ----
-    brier_per_class <- numeric(length(lev))  # Changed
-    names(brier_per_class) <- lev  # Changed
-    for (k in seq_along(lev)) {  # Changed
-      idx_k <- y_true == lev[k]  # Changed
+    brier_per_class <- numeric(length(lev))  
+    names(brier_per_class) <- lev 
+    for (k in seq_along(lev)) {  
+      idx_k <- y_true == lev[k]  
       if (sum(idx_k) > 0) {
         # Brier score for samples in class k
         brier_per_class[k] <- mean(rowSums(
@@ -581,10 +581,10 @@ train_multinomial_models <- function(
     
     # Class proportions
     class_counts <- table(y_true)
-    class_props  <- numeric(length(lev))  # Changed
-    names(class_props) <- lev  # Changed
+    class_props  <- numeric(length(lev))  
+    names(class_props) <- lev 
     
-    for (cl in lev) {  # Changed
+    for (cl in lev) {  
       if (cl %in% names(class_counts)) {
         class_props[cl] <- class_counts[cl] / length(y_true)
       } else {
@@ -939,7 +939,6 @@ train_multiple_targets_univariate <- function(
             n_repeats = 5
           )
         }
-        cat("  -> Result structure:", names(result), "\n")  # Debug: see what's returned
        
          # Store results with variable name
         target_results[[var]] <- result
