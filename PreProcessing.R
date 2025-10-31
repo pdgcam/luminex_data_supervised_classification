@@ -1,7 +1,7 @@
 # --- Script to pre-process data
 
 # --- source functions
-source(here('/Users/ap2488/Desktop/supervised_learning_flavi/new_code_scripts/Functions.R'))
+source(here('Functions.R'))
 
 # ---  function to convert HAI values to numeric
 convert_hai_to_numeric <- function(x) {
