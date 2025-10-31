@@ -820,7 +820,7 @@ train_multiple_targets <- function(
   combined_comparison <- combined_comparison[, col_order]
   
   # Combine all predictions dataframes
-  combined_predictions <- do.call(rbind, all_predictions)
+  combined_predictions <- dplyr::bind_rows(all_predictions)
   rownames(combined_predictions) <- NULL
   # Reorder columns to put Target first
   pred_col_order <- c("Target", setdiff(names(combined_predictions), "Target"))
