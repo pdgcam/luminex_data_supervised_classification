@@ -578,21 +578,8 @@ train_multinomial_models <- function(
         brier_per_class[k] <- NA_real_
       }
     }
-    
-    # Class proportions
-    class_counts <- table(y_true)
-    class_props  <- numeric(length(lev))  
-    names(class_props) <- lev 
-    
-    for (cl in lev) {  
-      if (cl %in% names(class_counts)) {
-        class_props[cl] <- class_counts[cl] / length(y_true)
-      } else {
-        class_props[cl] <- 0
-      }
-    }
-    # Weighted average of per-class Brier scores
-    strat_brier <- sum(class_props * brier_per_class, na.rm = TRUE)
+    # Equal weight to each class (balanced)
+    strat_brier <- mean(brier_per_class, na.rm = TRUE)
     
     c(
       Accuracy       = acc,
