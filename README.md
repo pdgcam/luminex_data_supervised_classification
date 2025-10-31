@@ -40,7 +40,7 @@ Returns all_processed_dfs, which contains ratio_data (used for longitudinal anal
 Ratio data = Post infection / Pre infection ratio for each individual patient 
 Cross_sectional_data = MFI titre value at last blood draw for each individual patient 
 
-Note: If data already in correct format (for longitudinal / cross-sectional analysis, do not need to run PreProcessing.R, can fit models directly) 
+Note: If data already in correct format (for longitudinal / cross-sectional analysis), do not need to run PreProcessing.R, can fit models directly
 
 
 
