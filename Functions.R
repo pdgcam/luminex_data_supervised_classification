@@ -106,19 +106,19 @@ select_targets <- function(preprocessed_data,
     dengue              = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1),
     zika                = c(ZIKV = 1),
     dengue_zika         = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 2),
-    dengue_serotype     = c(DENV1 = 1, DENV2 = 2, DENV4 = 3),
-    dengue_serotype_neg = c(DENV1 = 1, DENV2 = 2, DENV4 = 3),
+    dengue_serotype     = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
+    dengue_serotype_neg = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
     dengue_chik         = c(DENV1 = 0, DENV2 = 0, DENV3 = 0, DENV4 = 0, CHIKV = 1))
   
   # factor levels/labels
   label_specs <- list(
-    flavi               = list(levels = c(0, 1),        labels = c("negative", "positive")),
-    dengue              = list(levels = c(0, 1),        labels = c("negative", "positive")),
-    zika                = list(levels = c(0, 1),        labels = c("negative", "positive")),
-    dengue_zika         = list(levels = c(0, 1, 2),     labels = c("negative", "dengue", "zika")),
-    dengue_serotype     = list(levels = c(1, 2, 3),     labels = c("DENV1", "DENV2", "DENV4")),
-    dengue_serotype_neg = list(levels = c(0, 1, 2, 3),  labels = c("negative", "DENV1", "DENV2", "DENV4")),
-    dengue_chik         = list(levels = c(0, 1),        labels = c("dengue", "CHIKV"))
+    flavi               = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    dengue              = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    zika                = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    dengue_zika         = list(levels = c(0, 1, 2),        labels = c("negative", "dengue", "zika")),
+    dengue_serotype     = list(levels = c(1, 2, 3, 4),     labels = c("DENV1", "DENV2", "DENV3", "DENV4")),
+    dengue_serotype_neg = list(levels = c(0, 1, 2, 3, 4),  labels = c("negative", "DENV1", "DENV2", "DENV3", "DENV4")),
+    dengue_chik         = list(levels = c(0, 1),           labels = c("dengue", "CHIKV"))
   )
   
   
