@@ -1,67 +1,128 @@
-Data structure: 
-Univariate: Singe variable used for predict 
-Multivariate: 2 or more variables used for prediction 
+# Luminex Classification Analysis
 
-Classification targets: 
-Flavivirus versus not (binomial)
-Any DENV vs no DENV (binomial)
-ZIKV vs no ZIKV (binomial) 
-Any DENV vs ZIKV given flavivirus infection (binomial)
-CHIKV vs DENV
-Any DENV vs ZIKV vs no infection (multinomial) (kept as placeholder for now) 
-DENV serotype given infection (multinomial)
-DENV serotype vs neg 
+A machine learning pipeline for predicting flavivirus infections using serological data.
 
-Analysis: 
-Longitudinal: Ratio of pre- and post-infection timepoints per sample)
-Cross-sectional:  Last infection per sample 
+---
 
-Models: 
-Binomial Multivariate : GLM, Random Forest, Support Vector Machine 
-Binomial Univariate : GLM, Decision Tree, Support Vector Machine  
-Multinomial Multivariate: Random Forest, Naive Bayes
+## Data Structure
 
-Metrics: 
-AUROC
-AUPRC 
-Brier
-Stratified Brier (for multinomial) 
+### Analysis Types
+- **Univariate**: Single variable used for prediction
+- **Multivariate**: Two or more variables used for prediction
 
+### Analysis Approaches
+- **Longitudinal**: Ratio of pre- and post-infection timepoints per sample
+- **Cross-sectional**: Last draw per sample
 
+---
 
-Further detaials about scripts: 
+## Classification Targets
 
-
-1) PreProcessing.R : 
-Takes dataset with logged MFI values, Target infection and metadata (patient ID, days since infection) 
-Use HI titres to calculate log mean HI ratio between each blood draw, if ratio < 1.6, classify sample as 'no infection'
-Use only samples classified as 'no infection' for model fitting, else remove samples
-Returns all_processed_dfs, which contains ratio_data (used for longitudinal analysis) and cross_sectional_data (used for cross-sectional analysis) 
-Ratio data = Post infection / Pre infection ratio for each individual patient 
-Cross_sectional_data = MFI titre value at last blood draw for each individual patient 
-
-Note: If data already in correct format (for longitudinal / cross-sectional analysis), do not need to run PreProcessing.R, can fit models directly
+### Binomial Classifications
+- Flavivirus vs. not flavivirus
+- Any DENV vs. no DENV
+- ZIKV vs. no ZIKV
+- Any DENV vs. ZIKV (given flavivirus infection)
+- CHIKV vs. DENV
+  
+### Multinomial Classifications
+- Any DENV vs. ZIKV vs. no infection 
+- DENV serotype classification (given infection)
+- DENV serotype vs. negative
 
 
+---
 
-2) Longitudinal_ModelFitting.R
-Takes all_processed_dfs and extract ratio data
-Runs select_targets function to get targets / classification questions to be evaluated
-Runs bionomial / multinomial model fitting and evaulation (using train_binary_models / train_multinomial_models functions respectively)
-Optionally can use train_multiple_targets function to train multiple targets simulataneously 
-Runs train_multiple_targets_univariate function to repeat  bionomial analysis using only a single variable as input
+## Models
 
+### Binomial Models
+- **Multivariate**: GLM, Random Forest, Support Vector Machine
+- **Univariate**: GLM, Decision Tree, Support Vector Machine
 
+### Multinomial Models
+- **Multivariate**: Random Forest, Naive Bayes
 
-3) CrossSectional_ModelFitting.R
-Runs same function as Longitudinal_ModelFitting but on cross_sectional_data (can be extracted from all_processed_dfs)
+---
 
-4) PostProcessing.R
-Imports modeling results and plots AUCROC, AUPRC, Brier and Strat Brier 
+## 📈 Evaluation Metrics
 
+- **AUROC** - Area Under the Receiver Operating Characteristic curve
+- **AUPRC** - Area Under the Precision-Recall Curve
+- **Brier Score** - Probabilistic prediction accuracy
+- **Stratified Brier Score** - For multinomial classifications
 
-5) PreProcessing_withCHIKV.R and CHIKV_dengue_Longitudinal_ModelFitting.R 
-Longitudinal binomial analysis for CHIKV vs dengue 
+---
 
+## Pipeline Scripts
 
+### 1. `PreProcessing.R`
 
+**Purpose**: Prepares raw serological data for model fitting
+
+**Input**:
+- Dataset with logged MFI values
+- Target infection labels
+- Metadata (patient ID, days since infection)
+
+**Process**:
+- Calculates log mean HI ratio between blood draws using HI titres
+- Classifies samples as "no infection" if ratio < 1.6
+- Retains only "no infection" samples for model fitting
+- Generates two datasets:
+  - `ratio_data` - For longitudinal analysis (post/pre infection ratios per sample)
+  - `cross_sectional_data` - For cross-sectional analysis (MFI at last blood draw per sample)
+
+**Output**: `all_processed_dfs` containing both analysis-ready datasets
+
+**Note**: If data is already formatted correctly, skip directly to model fitting scripts.
+
+---
+
+### 2. `Longitudinal_ModelFitting.R`
+
+**Purpose**: Trains and evaluates models on longitudinal (ratio) data
+
+**Process**:
+1. Extracts `ratio_data` from `all_processed_dfs`
+2. Selects classification targets using `select_targets()` function
+3. Trains and evaluates models:
+   - Binomial models: `train_binary_models()`
+   - Multinomial models: `train_multinomial_models()`
+   - Multiple targets: `train_multiple_targets()` (optional, if want to run on multiple targets simulataneously)
+4. Performs univariate analysis: `train_multiple_targets_univariate()`
+
+---
+
+### 3. `CrossSectional_ModelFitting.R`
+
+**Purpose**: Trains and evaluates models on cross-sectional data
+
+**Process**: Identical to `Longitudinal_ModelFitting.R`, but operates on `cross_sectional_data` extracted from `all_processed_dfs`
+
+---
+
+### 4. `PostProcessing.R`
+
+**Purpose**: Visualises model performance metrics
+
+**Process**:
+- Imports modeling results
+- Generates plots for:
+  - AUROC
+  - AUPRC
+  - Brier Score
+  - Stratified Brier Score
+
+---
+
+### 5. `PreProcessing_withCHIKV.R` & `CHIKV_dengue_Longitudinal_ModelFitting.R`
+
+**Purpose**: Pipeline for CHIKV vs. dengue longitudinal binomial analysis
+
+---
+
+## 📦 Requirements
+
+- R with required packages for GLM, Random Forest, SVM, Naive Bayes, and Decision Trees
+- Serological data with MFI values and infection labels
+- Metadata including patient IDs and infection timepoints
