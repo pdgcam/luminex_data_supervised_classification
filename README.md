@@ -123,7 +123,7 @@ A machine learning pipeline for predicting flavivirus infections using serologic
 
 ---
 
-## 📦 Requirements
+## Requirements
 
 - R with required packages for GLM, Random Forest, SVM, Naive Bayes, and Decision Trees
 - Serological data with MFI values and infection labels
