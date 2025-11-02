@@ -44,7 +44,7 @@ A machine learning pipeline for predicting flavivirus infections using serologic
 
 ---
 
-## 📈 Evaluation Metrics
+## Evaluation Metrics
 
 - **AUROC** - Area Under the Receiver Operating Characteristic curve
 - **AUPRC** - Area Under the Precision-Recall Curve
@@ -84,7 +84,7 @@ A machine learning pipeline for predicting flavivirus infections using serologic
 
 **Process**:
 1. Extracts `ratio_data` from `all_processed_dfs`
-2. Selects classification targets using `select_targets()` function
+2. Selects classification targets using [`select_targets()`](https://github.com/pdgcam/luminex_data_supervised_classification/blob/157dc37d8f1428e468f60d98c171c1801f78b9be/Functions.R#L80) function
 3. Trains and evaluates models:
    - Binomial models: `train_binary_models()`
    - Multinomial models: `train_multinomial_models()`
