@@ -86,10 +86,12 @@ A machine learning pipeline for predicting flavivirus infections using serologic
 1. Extracts `ratio_data` from `all_processed_dfs`
 2. Selects classification targets using [`select_targets()`](https://github.com/pdgcam/luminex_data_supervised_classification/blob/157dc37d8f1428e468f60d98c171c1801f78b9be/Functions.R#L80) function
 3. Trains and evaluates models:
-   - Binomial models: `train_binary_models()`
-   - Multinomial models: `train_multinomial_models()`
-   - Multiple targets: `train_multiple_targets()` (optional, if want to run on multiple targets simulataneously)
-4. Performs univariate analysis: `train_multiple_targets_univariate()`
+   - Binomial models: [`train_binary_models()`](https://github.com/pdgcam/luminex_data_supervised_classification/blob/1ad414c5ab848c14bfaac784e8273f3822aef94c/Functions.R#L170)
+   - Multinomial models: [`train_multinomial_models()`](https://github.com/pdgcam/luminex_data_supervised_classification/blob/1ad414c5ab848c14bfaac784e8273f3822aef94c/Functions.R#L421)
+   - Multiple targets: [`train_multiple_targets()`](https://github.com/pdgcam/luminex_data_supervised_classification/blob/1ad414c5ab848c14bfaac784e8273f3822aef94c/Functions.R#L732)
+ (optional, if want to run on multiple targets simulataneously)
+4. Performs univariate analysis: [`train_multiple_targets_univariate()`](https://github.com/pdgcam/luminex_data_supervised_classification/blob/1ad414c5ab848c14bfaac784e8273f3822aef94c/Functions.R#L845)
+
 
 ---
 
