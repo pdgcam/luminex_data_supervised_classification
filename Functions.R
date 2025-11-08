@@ -392,9 +392,10 @@ train_binary_models <- function(
   comparison_df <- data.frame(Model = display_names)
   
   # Calculate metrics 
-  for (metric in metrics) {
+    for (metric in metrics) {
+    resamp_metric <- if (metric == "AUROC") "ROC" else metric
     comparison_df[[metric]] <- sapply(model_names, function(model) {
-      col_name <- paste0(model, "~", metric)
+      col_name <- paste0(model, "~", resamp_metric)
       # mean out-of-fold performance across all folds 
       mean(resamp$values[[col_name]], na.rm = TRUE)
     })
@@ -846,7 +847,7 @@ train_multiple_targets_univariate <- function(
     data_list,  
     variables = NULL,  # Vector of variable names to test one by one
     k_fold = 5,
-    metrics = c("AUC", "AUPRC", "Brier", "StratBrier"),
+    metrics = c("AUROC", "AUPRC", "Brier", "StratBrier"),
     univariate = TRUE) {
   
   
