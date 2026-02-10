@@ -1,7 +1,32 @@
 # --- Script for preprocessing data to run CHIKV vs Dengue
+install.packages("readxl")
+# Import libraries
+library(ggplot2)
+library(cowplot)
+library(RColorBrewer)
+library(matrixStats)
+library(stringr)
+library(data.table)
+library(dplyr)
+library(scales)
+library(purrr)
+library(tidyr)
+library(stringr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(dplyr)
+library(here)
+library(terra)
+library(exactextractr)
+library(raster)
+library(readxl)
+
 
 #--- source functions
-source(here('Functions.R'))
+source(here('/Users/ap2488/Documents/GitHub/updates_uminex_data_supervised_classification/Functions.R'))
+
+
 
 # ---  function to convert HAI values to numeric
 convert_hai_to_numeric <- function(x) {
@@ -17,11 +42,54 @@ log_transform <- function (titre) {
   1 + (log(titre / 10) / log(2))
 }
 
-# import Luminex / MSD data
-# assumes data has: MFI values, target infection, patient ID, days since infection
-# acute and convalescent samples have been removed 
-raw_data_with_chik <- read_csv('luminex_data_with_hai_chik.csv')
+# validation and random datasets (cebu)
+# validation subset = PCR confirmed cases
+validation_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/MIA_DataBaseOut_ValidationSet.csv")
+random_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/MIA_DataBaseOut_RandomSubset.csv")
+cebu_mutiple_antigens <- read_excel("/Users/ap2488/Desktop/supervised_learning_flavi/db_philippines_IgG_IgA_IgM_avidity.xlsx")
 
+# align patient IDs / PCR cols across datasets
+cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
+length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
+
+
+# cebu data with multiple antigens 
+head(cebu_mutiple_antigens)
+colnames(cebu_mutiple_antigens)
+
+# Simpler version - just antigen as columns
+cebu_pivot <- cebu_mutiple_antigens %>%
+  pivot_wider(
+    names_from = antigen,
+    values_from = RAU
+  )
+View(cebu_pivot)
+class(cebu_pivot$date_sample)
+table(cebu_pivot$PCR)
+
+
+cebu_pivot_days_since_inf  <- cebu_pivot %>%
+  group_by(id_patient) %>%
+  arrange(date_sample) %>%
+  mutate(
+    # Count actual infections (positive PCRs only)
+    n_infections = sum(!is.na(PCR) & PCR != "negative"),
+    
+    # First PCR test date (regardless of result - includes "negative")
+    infection_date = first(date_sample[!is.na(PCR)]),
+    
+    # Days since first PCR test
+    days_since_infection = as.numeric(difftime(date_sample, infection_date, units = "days"))
+  ) %>%
+  ungroup()
+View(cebu_pivot_days_since_inf)
+head(cebu_pivot_days_since_inf$id_patient)
+
+validate <- cebu_pivot_days_since_inf %>%
+  filter(id_patient %in% c("CPC-C-0010-00", "CPC-C-0047-00")) %>%
+  dplyr::select(id_patient, date_sample, PCR, infection_date, days_since_infection, n_infections) %>%
+  arrange(id_patient, date_sample)
+View(validate)
 
 # use HI to informed if pcr neg == no infection 
 df_with_HI_ratio_chik <- raw_data_with_chik %>%

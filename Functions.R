@@ -504,7 +504,7 @@ train_multinomial_models <- function(
     
     # One-vs-Rest metrics for each class
     auc_per_class   <- numeric(length(lev))  
-    auprc_per_class <- numeric(length(lev))  lev
+    auprc_per_class <- numeric(length(lev)) 
     
     # micro-averaging AUC/AUPRC
     all_y_binary <- c()
