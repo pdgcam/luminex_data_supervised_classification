@@ -1,4 +1,20 @@
-# ---- Function for Supervised Classification ----
+
+# --- PREPROCESSING FUNCTIONS ---
+
+# ---  Convert HAI values to numeric
+convert_hai_to_numeric <- function(x) {
+  case_when(
+    is.na(x) ~ NA_real_,
+    x == "NA" ~ NA_real_,
+    x == "<10" ~ 5,  # Treat <10 as 5 (undetectable HI)
+    TRUE ~ as.numeric(as.character(x))
+  )
+}
+#--- Log transform of HI values
+log_transform <- function (titre) {
+  1 + (log(titre / 10) / log(2))
+}
+
 
 # ---- Preprocess data ----
 process_luminex_data <- function(raw_data, patient_mapping, pre_threshold = -1) {
@@ -75,6 +91,7 @@ process_luminex_data <- function(raw_data, patient_mapping, pre_threshold = -1) 
 }
 
 
+# --- SUPERVISED CLASSIFICATION FUNCTIONS ---
 
 # ---- Select targets / classification questions ----
 select_targets <- function(preprocessed_data,

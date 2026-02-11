@@ -1,5 +1,6 @@
 # --- Script for preprocessing data to run CHIKV vs Dengue
-install.packages("readxl")
+install.packages("gtsummary")
+install.packages("rlang")
 # Import libraries
 library(ggplot2)
 library(cowplot)
@@ -21,6 +22,7 @@ library(terra)
 library(exactextractr)
 library(raster)
 library(readxl)
+library(knitr)
 
 
 #--- source functions
@@ -52,47 +54,35 @@ cebu_mutiple_antigens <- read_excel("/Users/ap2488/Desktop/supervised_learning_f
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
 
-
-# cebu data with multiple antigens 
-head(cebu_mutiple_antigens)
-colnames(cebu_mutiple_antigens)
-
-# Simpler version - just antigen as columns
+# pivot to get RAU as main data
 cebu_pivot <- cebu_mutiple_antigens %>%
   pivot_wider(
     names_from = antigen,
     values_from = RAU
   )
-View(cebu_pivot)
-class(cebu_pivot$date_sample)
-table(cebu_pivot$PCR)
 
 
+# --- Add col: days_since_infection 
 cebu_pivot_days_since_inf  <- cebu_pivot %>%
   group_by(id_patient) %>%
   arrange(date_sample) %>%
   mutate(
+    # Count number of samples/timepoints per patient
+    n_samples = n(),
     # Count actual infections (positive PCRs only)
     n_infections = sum(!is.na(PCR) & PCR != "negative"),
-    
     # First PCR test date (regardless of result - includes "negative")
     infection_date = first(date_sample[!is.na(PCR)]),
-    
     # Days since first PCR test
     days_since_infection = as.numeric(difftime(date_sample, infection_date, units = "days"))
   ) %>%
   ungroup()
-View(cebu_pivot_days_since_inf)
-head(cebu_pivot_days_since_inf$id_patient)
 
-validate <- cebu_pivot_days_since_inf %>%
-  filter(id_patient %in% c("CPC-C-0010-00", "CPC-C-0047-00")) %>%
-  dplyr::select(id_patient, date_sample, PCR, infection_date, days_since_infection, n_infections) %>%
-  arrange(id_patient, date_sample)
-View(validate)
 
+
+# --- Use HI threshold (1.6) to remove subclinical infection 
 # use HI to informed if pcr neg == no infection 
-df_with_HI_ratio_chik <- raw_data_with_chik %>%
+HI_ratio_df <- cebu_pivot_days_since_inf %>%
   mutate(across(starts_with("HAI_"), convert_hai_to_numeric)) %>%
   arrange(id_patient, days_since_infection) %>%
   group_by(id_patient) %>%
@@ -121,40 +111,100 @@ df_with_HI_ratio_chik <- raw_data_with_chik %>%
   ) %>%
   ungroup()
 
+
 # use ratio threshold == 1.6
-df_with_HI_ratio_chik <- df_with_HI_ratio_chik %>% 
-  mutate(new_target = case_when(
-    log_mean_HI_ratio < 1.6  ~ 'no_infection', 
-    TRUE ~ NA_character_  
-  ))
-
-
-# --- Keep CHIKV as PCR target for dengue vs CHIKV 
-df_with_HI_ratio_chik <- df_with_HI_ratio_chik %>%
-  mutate(mapped_target = case_when(
-    Target %in% c('DENV1', 'DENV2', 'DENV3', 'DENV4', 'CHIKV') ~ Target,
-    Target %in% c('ZIKV','negative') ~ new_target,
-    TRUE ~ NA_character_
-  ))
-# Create patient-level mapping based on all rows per patient
-patient_mapping_chik <- df_with_HI_ratio_chik %>%
+HI_ratio_df <- HI_ratio_df %>%
   group_by(id_patient) %>%
-  summarise(
-    # For new_target: take the first non-NA value if any exists
-    patient_new_target = first(na.omit(new_target)),
-    # For Target: take the first non-NA value if any exists
-    patient_target = first(na.omit(Target))
-  ) %>%
   mutate(
-    # Apply your mapping logic at patient level
-    mapped_target = case_when(
-      patient_target %in% c('DENV1', 'DENV2', 'DENV3', 'DENV4', 'CHIKV') ~ patient_target,
-      patient_target %in% c('ZIKV', 'negative') ~ patient_new_target,
+    # Check if patient was EVER PCR positive
+    ever_pcr_positive = any(!is.na(PCR) & PCR != "negative"),
+    
+    # Only flag subclinical infections in patients who were always PCR negative
+    infection_status = case_when(
+      # If ever PCR positive, mark as PCR positive (regardless of HI)
+      ever_pcr_positive ~ 'PCR_positive',
+      
+      # For always-negative patients, check HI ratio for subclinical infection
+      !ever_pcr_positive & log_mean_HI_ratio >= log2(1.6) ~ 'subclinical_infection',
+      !ever_pcr_positive & log_mean_HI_ratio < log2(1.6) ~ 'true_negative',
+      
+      # Handle NAs (first timepoint, missing HI data)
       TRUE ~ NA_character_
     )
-  )
+  ) %>%
+  ungroup()
 
-all_processed_dfs_with_chik <- process_luminex_data(raw_data_with_chik, patient_mapping_chik, pre_threshold = -1)
+
+# Identify patients to exclude
+patients_to_exclude <- HI_ratio_df %>%
+  group_by(id_patient) %>%
+  summarise(
+    has_subclinical = any(infection_status == 'subclinical_infection', na.rm = TRUE),
+    all_na = all(is.na(infection_status))
+  ) %>%
+  filter(has_subclinical | all_na) %>%
+  pull(id_patient)
+
+# Clean dataframe
+clean_HI_ratio_df <- HI_ratio_df %>%
+  filter(!id_patient %in% patients_to_exclude)
+length(unique(clean_HI_ratio_df$id_patient))
+
+# excluded IDs: 
+# "CPC-C-0277-00" #all HI log mean = NA unknown if subclinical
+# "CPC-C-0329-00" #all HI log mean = NA unknown if subclinical
+# "CPC-C-0068-00" # subclinical using log(1.6) threshold
+
+
+table(clean_HI_ratio_df$PCR)
+
+# Create patient-level mapping
+patient_pcr_mapping <- clean_HI_ratio_df %>%
+  group_by(id_patient) %>%
+  summarise(
+    # Check what PCR results this patient has
+    has_zikv = any(PCR == 'ZIKV', na.rm = TRUE),
+    has_chikv = any(PCR == 'CHIKV', na.rm = TRUE),
+    has_denv = any(PCR %in% c('DENV1', 'DENV2', 'DENV3', 'DENV4'), na.rm = TRUE),
+    
+    # Get first PCR result for reference
+    patient_pcr = first(na.omit(PCR)),
+    
+    # Get infection status
+    patient_infection_status = first(na.omit(infection_status))
+  ) %>%
+  mutate(
+    # Map to target label with ZIKV priority
+    target = case_when(
+      # Prioritize ZIKV if present
+      has_zikv ~ 'ZIKV',
+      
+      # Then DENV
+      has_denv ~ patient_pcr,
+      
+      # Then CHIKV
+      has_chikv ~ 'CHIKV',
+      
+      # True negatives
+      patient_infection_status == 'true_negative' ~ 'negative',
+      
+      TRUE ~ NA_character_
+    )
+  ) %>% dplyr::select(id_patient, target)  
+
+table(patient_pcr_mapping$target)
+
+# table of samples per pathogen (Fig1)
+patient_pcr_mapping %>%
+  count(target) %>%
+  mutate(percent = round(100 * n / sum(n), 1),
+         `n (%)` = paste0(n, " (", percent, "%)")) %>%
+  select(`PCR Target` = target, `n (%)`) %>%
+  kable(caption = "Distribution of PCR Targets")
+
+
+
+all_preprocessed_dfs <- process_luminex_data(clean_HI_ratio_df, patient_pcr_mapping, pre_threshold = -1)
 
 # ---- save pre-processed dfs ----
 saveRDS(all_processed_dfs_with_chik, here("luminex_processed_data_with_chik.rds"))
