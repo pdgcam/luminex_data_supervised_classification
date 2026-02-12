@@ -1,6 +1,4 @@
-# --- Script for preprocessing data to run CHIKV vs Dengue
-install.packages("gtsummary")
-install.packages("rlang")
+# --- Script for preprocessing data and visualising tire dynamics 
 # Import libraries
 library(ggplot2)
 library(cowplot)
@@ -23,7 +21,8 @@ library(exactextractr)
 library(raster)
 library(readxl)
 library(knitr)
-
+library(patchwork)
+library(tidyverse)
 
 #--- source functions
 source(here('/Users/ap2488/Documents/GitHub/updates_uminex_data_supervised_classification/Functions.R'))
@@ -69,8 +68,6 @@ cebu_pivot_days_since_inf  <- cebu_pivot %>%
   mutate(
     # Count number of samples/timepoints per patient
     n_samples = n(),
-    # Count actual infections (positive PCRs only)
-    n_infections = sum(!is.na(PCR) & PCR != "negative"),
     # First PCR test date (regardless of result - includes "negative")
     infection_date = first(date_sample[!is.na(PCR)]),
     # Days since first PCR test
@@ -109,7 +106,7 @@ HI_ratio_df <- cebu_pivot_days_since_inf %>%
     time_diff = days_since_infection - lag(days_since_infection),
     log_mean_HI_ratio = mean_log_HI - lag(mean_log_HI) 
   ) %>%
-  ungroup()
+  ungroup()  %>% dplyr::select(-prev_days_since_infection, -time_diff)
 
 
 # use ratio threshold == 1.6
@@ -131,8 +128,7 @@ HI_ratio_df <- HI_ratio_df %>%
       # Handle NAs (first timepoint, missing HI data)
       TRUE ~ NA_character_
     )
-  ) %>%
-  ungroup()
+  ) %>% ungroup() %>% dplyr::select(-ever_pcr_positive)
 
 
 # Identify patients to exclude
@@ -156,7 +152,32 @@ length(unique(clean_HI_ratio_df$id_patient))
 # "CPC-C-0068-00" # subclinical using log(1.6) threshold
 
 
-table(clean_HI_ratio_df$PCR)
+antigen_cols <- c(
+  "CCHF_NP", "CHIKV_E2","CHIKV_NSP123",
+  "CHIKV_VLP","DENV1_DIII","DENV1_NS1",
+  "DENV1_VLP","DENV2_DIII","DENV2_NS1",
+  "DENV2_VLP","DENV3_DIII","DENV3_NS1",
+  "DENV3_VLP", "DENV4_DIII","DENV4_NS1",
+  "DENV4_VLP","JEV_E","JEV_NS1", "MAYV_E2",
+  "ONNV_E2","ONNV_VLP","OROV_Gc","OROV_Gn",
+  "OROV_NP_Clinisciences","OROV_NP_NA",
+  "RR","RVFV","USUV_NS1","WNV_DIII",
+  "WNV_NS1","YFV_E","YFV_NS1","ZIKV_NS1",
+  "ZIKV_VLP","ZIKVAS_DIII", "ZIKVSU_NS1",
+  "SHERPADES_CHIKV_E2", "SHERPADES_DENV1_DIII",
+  "SHERPADES_DENV2_DIII","SHERPADES_DENV3_DIII",
+  "SHERPADES_DENV4_DIII","SHERPADES_JEV_DIII",
+  "SHERPADES_MAYV_E2","SHERPADES_RR",
+  "SHERPADES_RVFV","SHERPADES_USUV_DIII",
+  "SHERPADES_WNV_DIII","SHERPADES_YFV_DIII",
+  "SHERPADES_ZIKV_DIII"
+)
+
+
+# log antigen cols for downstream analysis 
+clean_HI_ratio_df[antigen_cols] <- 
+  log10(clean_HI_ratio_df[antigen_cols])
+
 
 # Create patient-level mapping
 patient_pcr_mapping <- clean_HI_ratio_df %>%
@@ -204,8 +225,180 @@ patient_pcr_mapping %>%
 
 
 
-all_preprocessed_dfs <- process_luminex_data(clean_HI_ratio_df, patient_pcr_mapping, pre_threshold = -1)
 
-# ---- save pre-processed dfs ----
-saveRDS(all_processed_dfs_with_chik, here("luminex_processed_data_with_chik.rds"))
+# Define antigen groups
+flavivirus_antigens <- c(
+  "DENV1_DIII", "DENV1_VLP", "DENV1_NS1",
+  "DENV2_DIII", "DENV2_VLP", "DENV2_NS1",
+  "DENV3_DIII", "DENV3_VLP", "DENV3_NS1",
+  "DENV4_DIII", "DENV4_VLP", "DENV4_NS1",
+  "ZIKVAS_DIII", "ZIKV_VLP", "ZIKV_NS1", "ZIKVSU_NS1",
+  "SHERPADES_DENV1_DIII", "SHERPADES_DENV2_DIII", 
+  "SHERPADES_DENV3_DIII", "SHERPADES_DENV4_DIII",
+  "SHERPADES_ZIKV_DIII"
+)
 
+alphavirus_antigens <- c(
+  "CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP",
+  "ONNV_E2", "ONNV_VLP",
+  "MAYV_E2",
+  "RR"
+)
+
+# Filter for IgG and prepare data # Filter for IgG and prepare data
+plot_data <- clean_HI_ratio_df %>%
+  filter(isotype == "IgG") %>%
+  select(id_patient, id_sample, days_since_infection, PCR, 
+         all_of(c(flavivirus_antigens, alphavirus_antigens))) %>%
+  pivot_longer(cols = c(all_of(flavivirus_antigens), all_of(alphavirus_antigens)),
+               names_to = "antigen") 
+
+
+
+# Separate pathogen and antigen type
+plot_data <- plot_data %>%
+  mutate(
+    pathogen = case_when(
+      str_detect(antigen, "^SHERPADES_") ~ str_extract(antigen, "(?<=SHERPADES_)[^_]+"),
+      str_detect(antigen, "^ZIKVSU") ~ "ZIKV",
+      str_detect(antigen, "^ZIKVAS") ~ "ZIKV",
+      TRUE ~ str_extract(antigen, "^[^_]+")
+    ),
+    antigen_type = case_when(
+      str_detect(antigen, "^SHERPADES_") ~ "SHERPADES_DIII",
+      TRUE ~ str_extract(antigen, "[^_]+$")
+    ),
+    virus_family = case_when(
+      pathogen %in% c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV") ~ "Flavivirus",
+      pathogen %in% c("CHIKV", "ONNV", "MAYV", "RRV") ~ "Alphavirus"
+    )
+  )
+
+# Create time categories for x-axis (like screenshot)
+plot_data <- plot_data %>%
+  mutate(
+    time_category = case_when(
+      days_since_infection < -30 ~ "pre-infection",
+      days_since_infection >= -30 & days_since_infection < 0 ~ as.character(days_since_infection),
+      days_since_infection >= 0 & days_since_infection <= 30 ~ as.character(days_since_infection),
+      days_since_infection > 30 ~ ">30"
+    ),
+    # Create numeric position for plotting
+    x_position = case_when(
+      days_since_infection < -30 ~ -35,
+      days_since_infection >= -30 & days_since_infection < 0 ~ days_since_infection,
+      days_since_infection >= 0 & days_since_infection <= 30 ~ days_since_infection,
+      days_since_infection > 30 ~ 35
+    )
+  )
+
+# Create homologous/heterologous indicator
+plot_data <- plot_data %>%
+  mutate(
+    response_type = case_when(
+      pathogen == PCR ~ "Homologous",
+      TRUE ~ "Heterologous"
+    )
+  )
+
+plot_data <- plot_data %>%
+  group_by(id_patient) %>%
+  fill(PCR, .direction = "downup") %>%
+  ungroup()
+
+plot_data <- plot_data %>%
+  mutate(
+    color_group = if_else(pathogen == PCR, PCR, "Other")
+  )
+
+# Color palette
+pcr_colors <- c(
+  "DENV1" = "#012b48",
+  "DENV2" = "#0396f8", 
+  "DENV3" = "#693bf1",
+  "DENV4" = "#de5a7b",
+  "ZIKV" = "#21737c",
+  "Other" = "grey90"
+)
+
+plot_antigen_dynamics <- function(data, pathogen_subset = NULL) {
+  
+  if (!is.null(pathogen_subset)) {
+    data <- data %>% filter(pathogen %in% pathogen_subset)
+  }
+  
+  ggplot(data, aes(x = x_position, y = value, group = id_patient)) +
+    
+    geom_line(aes(color = color_group),
+              alpha = 0.7, linewidth = 0.5) +
+    
+    geom_point(aes(color = color_group),
+               alpha = 0.8, size = 1.3) +
+    
+    facet_grid(antigen_type ~ pathogen, scales = "free_y") +
+    
+    scale_color_manual(values = pcr_colors, name = "PCR Confirmed") +
+    
+    scale_x_continuous(
+      breaks = c(-35, seq(-20, 30, 10), 35),
+      labels = c("pre-infection", seq(-20, 30, 10), ">30")
+    ) +
+    
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black", alpha = 0.3) +
+    
+    labs(x = "Days since PCR+ infection",
+         y = "Antibody Titre (log10)",
+         title = "IgG Antibody Dynamics Around Infection") +
+    
+    theme_bw() +
+    theme(
+       # Facet strips
+        strip.text = element_text(size = 12),
+        
+        # Axis text
+        axis.text = element_text(size = 11),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title = element_text(size = 13),
+        
+        # Legend
+        legend.position = "bottom",
+        legend.text = element_text(size = 11),
+        legend.title = element_text(size = 11),
+        legend.direction = "horizontal",
+        legend.margin = margin(20, 0, 0, 0),
+        
+        # Panel spacing (important for faceted plots)
+        panel.spacing = unit(1.2, "lines"),
+        
+        # Grid styling
+        panel.grid.minor = element_blank(),
+        
+        # Outer box
+        plot.background = element_rect(
+          fill = "white", 
+          color = "black", 
+          linewidth = 0.5
+        ),
+        
+        plot.margin = margin(10, 5, 15, 5)
+    )
+}
+
+
+# Create Flavivirus plot
+flavi_plot <- plot_antigen_dynamics(
+  data = plot_data %>% filter(pathogen %in% c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV"))
+)
+print(flavi_plot)
+# Create Alphavirus plot  
+alpha_plot <- plot_antigen_dynamics(
+  data = plot_data %>% filter(pathogen %in% c("CHIKV", "ONNV", "MAYV", "RRV"))
+)
+print(alpha_plot)
+# Save plots
+ggsave("/Users/ap2488/Desktop/supervised_learning_flavi/FinalLuminexClassification/flavivirus_IgG_dynamics.png", 
+flavi_plot, width = 16, height = 10)
+
+# save file 
+write.csv(clean_HI_ratio_df,
+"/Users/ap2488/Desktop/supervised_learning_flavi/FinalLuminexClassification/clean_HI_ratio_df.csv")

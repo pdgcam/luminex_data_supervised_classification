@@ -17,71 +17,55 @@ log_transform <- function (titre) {
 
 
 # ---- Preprocess data ----
-process_luminex_data <- function(raw_data, patient_mapping, pre_threshold = -1) {
+process_luminex_data <- function(raw_data, patient_mapping, antigen_cols, pre_threshold = -1) {
   
-  # Define metadata columns
-  META_COLS <- c('id_patient', 'date_sample', 'PCR', 'days_since_infection', 'Target',
-                 "HAI_DENV1" , "HAI_DENV2", "HAI_DENV3","HAI_DENV4" )
-  
-  # Label timepoints based on threshold
-  processing_df <- raw_data %>%
-    mutate(timepoint = ifelse(days_since_infection <= pre_threshold, 'pre', 'post'))
-  
-  # Identify antigen columns, exclude metadata
-  antigen_cols <- setdiff(names(processing_df), c(META_COLS, 'timepoint'))
-  
-  # Dataset 1: Post/pre  Ratio
-  grouped_means <- processing_df %>%
+  # Validate that antigen columns exist in the data
+  missing_cols <- setdiff(antigen_cols, names(raw_data))
+  if (length(missing_cols) > 0) {
+    stop("Missing columns in data: ", paste(missing_cols, collapse = ", "))
+  }
+
+   # ---- Dataset 1: Post/Pre Ratio ----
+  ratio_df <- raw_data %>%
+    # Label pre vs post
+    mutate(timepoint = ifelse(days_since_infection <= pre_threshold, 'pre', 'post')) %>%
+    # Average antigens per patient per timepoint
     group_by(id_patient, timepoint) %>%
-    summarise(across(all_of(antigen_cols), ~mean(.x, na.rm = TRUE)), .groups = 'drop')
-  
-  averages_pivot <- grouped_means %>%
+    summarise(across(all_of(antigen_cols), ~mean(.x, na.rm = TRUE)), .groups = 'drop') %>%
+    # Pivot to get pre and post columns
     pivot_wider(
       names_from = timepoint,
       values_from = all_of(antigen_cols),
-      names_glue = "{.value}_{timepoint}"
-    )
-  
-  post_cols <- grep("_post$", names(averages_pivot), value = TRUE)
-  pre_cols <- grep("_pre$", names(averages_pivot), value = TRUE)
-  base_names <- sub("_post$", "", post_cols)
-  
-  post <- averages_pivot %>%
-    dplyr::select(all_of(post_cols)) %>%
+      names_sep = "_"
+    ) %>%
+    # Calculate ratios
+    mutate(across(
+      .cols = ends_with("_post"),
+      .fns = ~. / get(sub("_post$", "_pre", cur_column())),
+      .names = "{sub('_post$', '', .col)}"
+    )) %>%
+    # Keep only ratio columns + id
+    select(id_patient, all_of(antigen_cols)) %>%
+    # Add target
+    left_join(patient_mapping, by = "id_patient") %>%
+    # Remove rows with any NA
+    na.omit() %>%
+    # Convert to dataframe with rownames
     as.data.frame()
-  names(post) <- base_names
-  rownames(post) <- averages_pivot$id_patient
-  
-  pre <- averages_pivot %>%
-    dplyr::select(all_of(pre_cols)) %>%
-    as.data.frame()
-  names(pre) <- base_names
-  rownames(pre) <- averages_pivot$id_patient
-  ratio_df <- (post / pre) %>%
-    na.omit()
-
-  # add target using the patient mapping
-  ratio_df$Target <- patient_mapping$mapped_target[match(rownames(ratio_df), patient_mapping$id_patient)]
   
   # Dataset 2: Last draw (ie draw at max days since infection)
-  cross_sectional_data <- raw_data %>%
+   cross_sectional_data <- raw_data %>%
     group_by(id_patient) %>%
     filter(days_since_infection == max(days_since_infection, na.rm = TRUE)) %>%
-    ungroup()
-  cross_sectional_data  <- cross_sectional_data  |> as.data.frame()
-  rownames(cross_sectional_data) <- cross_sectional_data$id_patient
-  # Keep patient ID, Target, and antigen columns
-  cross_sectional_data$Target <- patient_mapping$mapped_target[match(rownames(cross_sectional_data), patient_mapping$id_patient)]
-
-
-  # Remove metadata columns not required for further analysis
-  cross_sectional_data$days_since_infection  <- NULL
-  cross_sectional_data$id_patient <- NULL
-  cross_sectional_data$HAI_DENV1 <- NULL
-  cross_sectional_data$HAI_DENV2 <- NULL
-  cross_sectional_data$HAI_DENV3 <- NULL
-  cross_sectional_data$HAI_DENV4 <- NULL
+    ungroup() %>%
+    # Keep only selected antigen columns
+    select(id_patient, all_of(antigen_cols)) %>%
+    # Add target
+    left_join(patient_mapping, by = "id_patient") %>%
+    as.data.frame()
   
+  rownames(cross_sectional_data) <- cross_sectional_data$id_patient
+  cross_sectional_data$id_patient <- NULL
  
   # Return all three datasets as a list
   return(list(
