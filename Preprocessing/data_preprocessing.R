@@ -25,11 +25,11 @@ library(patchwork)
 library(tidyverse)
 
 #--- source functions
-source(here('/Users/ap2488/Documents/GitHub/updates_uminex_data_supervised_classification/Functions.R'))
+source(here('/Users/ap2488/Documents/GitHub/luminex_data_supervised_classification/Functions.R'))
 
 
+# Functions
 
-# ---  function to convert HAI values to numeric
 convert_hai_to_numeric <- function(x) {
   case_when(
     is.na(x) ~ NA_real_,
@@ -38,10 +38,70 @@ convert_hai_to_numeric <- function(x) {
     TRUE ~ as.numeric(as.character(x))
   )
 }
+
 #--- log transform of HI values
 log_transform <- function (titre) {
   1 + (log(titre / 10) / log(2))
 }
+
+# --- post/pre dataset + cross-sectional dataset
+prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pre_threshold = -1) {
+  
+  # Validate that antigen columns exist in the data
+  missing_cols <- setdiff(antigen_cols, names(raw_data))
+  if (length(missing_cols) > 0) {
+    stop("Missing columns in data: ", paste(missing_cols, collapse = ", "))
+  }
+
+   # ---- Dataset 1: Post/Pre Ratio ----
+  ratio_df <- raw_data %>%
+    # Label pre vs post
+    mutate(timepoint = ifelse(days_since_infection <= pre_threshold, 'pre', 'post')) %>%
+    # Average across all pre and post samples for each anitgen and each patient 
+    group_by(id_patient, timepoint) %>%
+    summarise(across(all_of(antigen_cols), ~mean(.x, na.rm = TRUE)), .groups = 'drop') %>%
+    # Pivot to get pre and post columns
+    pivot_wider(
+      names_from = timepoint,
+      values_from = all_of(antigen_cols),
+      names_sep = "_"
+    ) %>%
+    # Calculate ratios
+    mutate(across(
+      .cols = ends_with("_post"),
+      .fns = ~. / get(sub("_post$", "_pre", cur_column())),
+      .names = "{sub('_post$', '', .col)}"
+    )) %>%
+    # Keep only ratio columns + id
+    dplyr::select(id_patient, all_of(antigen_cols)) %>%
+    # Add target
+    left_join(patient_mapping, by = "id_patient") %>%
+    # Remove rows with any NA
+    na.omit() %>%
+    # Convert to dataframe with rownames
+    as.data.frame()
+  
+  # Dataset 2: Last draw (ie draw at max days since infection)
+  cross_sectional_data <- raw_data %>%
+    group_by(id_patient) %>%
+    filter(days_since_infection == max(days_since_infection, na.rm = TRUE)) %>%
+    ungroup() %>%
+    # Keep only selected antigen columns
+    dplyr::select(id_patient, all_of(antigen_cols)) %>%
+    # Add target
+    left_join(patient_mapping, by = "id_patient") %>%
+    na.omit() %>%
+    as.data.frame()
+  
+ 
+  # Return both datasets
+  return(list(
+    ratio = ratio_df,
+    cross_sectional_data = cross_sectional_data
+  ))
+}
+
+
 
 # validation and random datasets (cebu)
 # validation subset = PCR confirmed cases
@@ -60,7 +120,6 @@ cebu_pivot <- cebu_mutiple_antigens %>%
     values_from = RAU
   )
 
-
 # --- Add col: days_since_infection 
 cebu_pivot_days_since_inf  <- cebu_pivot %>%
   group_by(id_patient) %>%
@@ -74,7 +133,6 @@ cebu_pivot_days_since_inf  <- cebu_pivot %>%
     days_since_infection = as.numeric(difftime(date_sample, infection_date, units = "days"))
   ) %>%
   ungroup()
-
 
 
 # --- Use HI threshold (1.6) to remove subclinical infection 
@@ -144,7 +202,6 @@ patients_to_exclude <- HI_ratio_df %>%
 # Clean dataframe
 clean_HI_ratio_df <- HI_ratio_df %>%
   filter(!id_patient %in% patients_to_exclude)
-length(unique(clean_HI_ratio_df$id_patient))
 
 # excluded IDs: 
 # "CPC-C-0277-00" #all HI log mean = NA unknown if subclinical
@@ -153,7 +210,7 @@ length(unique(clean_HI_ratio_df$id_patient))
 
 
 antigen_cols <- c(
-  "CCHF_NP", "CHIKV_E2","CHIKV_NSP123",
+  "CHIKV_E2","CHIKV_NSP123",
   "CHIKV_VLP","DENV1_DIII","DENV1_NS1",
   "DENV1_VLP","DENV2_DIII","DENV2_NS1",
   "DENV2_VLP","DENV3_DIII","DENV3_NS1",
@@ -176,8 +233,7 @@ antigen_cols <- c(
 
 # log antigen cols for downstream analysis 
 clean_HI_ratio_df[antigen_cols] <- 
-  log10(clean_HI_ratio_df[antigen_cols])
-
+  log2(clean_HI_ratio_df[antigen_cols])
 
 # Create patient-level mapping
 patient_pcr_mapping <- clean_HI_ratio_df %>%
@@ -213,192 +269,24 @@ patient_pcr_mapping <- clean_HI_ratio_df %>%
     )
   ) %>% dplyr::select(id_patient, target)  
 
+# negative == NO PCR confirmed infection + subclinical (during study) removed 
 table(patient_pcr_mapping$target)
+target_counts <- as.data.frame(table(patient_pcr_mapping$target))
+colnames(target_counts) <- c("Target", "Count")
 
-# table of samples per pathogen (Fig1)
-patient_pcr_mapping %>%
-  count(target) %>%
-  mutate(percent = round(100 * n / sum(n), 1),
-         `n (%)` = paste0(n, " (", percent, "%)")) %>%
-  select(`PCR Target` = target, `n (%)`) %>%
-  kable(caption = "Distribution of PCR Targets")
+# save counts per target 
+write.csv(target_counts, "Results/target_counts.csv", row.names = FALSE)
 
-
-
-
-# Define antigen groups
-flavivirus_antigens <- c(
-  "DENV1_DIII", "DENV1_VLP", "DENV1_NS1",
-  "DENV2_DIII", "DENV2_VLP", "DENV2_NS1",
-  "DENV3_DIII", "DENV3_VLP", "DENV3_NS1",
-  "DENV4_DIII", "DENV4_VLP", "DENV4_NS1",
-  "ZIKVAS_DIII", "ZIKV_VLP", "ZIKV_NS1", "ZIKVSU_NS1",
-  "SHERPADES_DENV1_DIII", "SHERPADES_DENV2_DIII", 
-  "SHERPADES_DENV3_DIII", "SHERPADES_DENV4_DIII",
-  "SHERPADES_ZIKV_DIII"
-)
-
-alphavirus_antigens <- c(
-  "CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP",
-  "ONNV_E2", "ONNV_VLP",
-  "MAYV_E2",
-  "RR"
-)
-
-# Filter for IgG and prepare data # Filter for IgG and prepare data
-plot_data <- clean_HI_ratio_df %>%
-  filter(isotype == "IgG") %>%
-  select(id_patient, id_sample, days_since_infection, PCR, 
-         all_of(c(flavivirus_antigens, alphavirus_antigens))) %>%
-  pivot_longer(cols = c(all_of(flavivirus_antigens), all_of(alphavirus_antigens)),
-               names_to = "antigen") 
-
-
-
-# Separate pathogen and antigen type
-plot_data <- plot_data %>%
-  mutate(
-    pathogen = case_when(
-      str_detect(antigen, "^SHERPADES_") ~ str_extract(antigen, "(?<=SHERPADES_)[^_]+"),
-      str_detect(antigen, "^ZIKVSU") ~ "ZIKV",
-      str_detect(antigen, "^ZIKVAS") ~ "ZIKV",
-      TRUE ~ str_extract(antigen, "^[^_]+")
-    ),
-    antigen_type = case_when(
-      str_detect(antigen, "^SHERPADES_") ~ "SHERPADES_DIII",
-      TRUE ~ str_extract(antigen, "[^_]+$")
-    ),
-    virus_family = case_when(
-      pathogen %in% c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV") ~ "Flavivirus",
-      pathogen %in% c("CHIKV", "ONNV", "MAYV", "RRV") ~ "Alphavirus"
-    )
-  )
-
-# Create time categories for x-axis (like screenshot)
-plot_data <- plot_data %>%
-  mutate(
-    time_category = case_when(
-      days_since_infection < -30 ~ "pre-infection",
-      days_since_infection >= -30 & days_since_infection < 0 ~ as.character(days_since_infection),
-      days_since_infection >= 0 & days_since_infection <= 30 ~ as.character(days_since_infection),
-      days_since_infection > 30 ~ ">30"
-    ),
-    # Create numeric position for plotting
-    x_position = case_when(
-      days_since_infection < -30 ~ -35,
-      days_since_infection >= -30 & days_since_infection < 0 ~ days_since_infection,
-      days_since_infection >= 0 & days_since_infection <= 30 ~ days_since_infection,
-      days_since_infection > 30 ~ 35
-    )
-  )
-
-# Create homologous/heterologous indicator
-plot_data <- plot_data %>%
-  mutate(
-    response_type = case_when(
-      pathogen == PCR ~ "Homologous",
-      TRUE ~ "Heterologous"
-    )
-  )
-
-plot_data <- plot_data %>%
-  group_by(id_patient) %>%
-  fill(PCR, .direction = "downup") %>%
-  ungroup()
-
-plot_data <- plot_data %>%
-  mutate(
-    color_group = if_else(pathogen == PCR, PCR, "Other")
-  )
-
-# Color palette
-pcr_colors <- c(
-  "DENV1" = "#012b48",
-  "DENV2" = "#0396f8", 
-  "DENV3" = "#693bf1",
-  "DENV4" = "#de5a7b",
-  "ZIKV" = "#21737c",
-  "Other" = "grey90"
-)
-
-plot_antigen_dynamics <- function(data, pathogen_subset = NULL) {
-  
-  if (!is.null(pathogen_subset)) {
-    data <- data %>% filter(pathogen %in% pathogen_subset)
-  }
-  
-  ggplot(data, aes(x = x_position, y = value, group = id_patient)) +
-    
-    geom_line(aes(color = color_group),
-              alpha = 0.7, linewidth = 0.5) +
-    
-    geom_point(aes(color = color_group),
-               alpha = 0.8, size = 1.3) +
-    
-    facet_grid(antigen_type ~ pathogen, scales = "free_y") +
-    
-    scale_color_manual(values = pcr_colors, name = "PCR Confirmed") +
-    
-    scale_x_continuous(
-      breaks = c(-35, seq(-20, 30, 10), 35),
-      labels = c("pre-infection", seq(-20, 30, 10), ">30")
-    ) +
-    
-    geom_vline(xintercept = 0, linetype = "dashed", color = "black", alpha = 0.3) +
-    
-    labs(x = "Days since PCR+ infection",
-         y = "Antibody Titre (log10)",
-         title = "IgG Antibody Dynamics Around Infection") +
-    
-    theme_bw() +
-    theme(
-       # Facet strips
-        strip.text = element_text(size = 12),
-        
-        # Axis text
-        axis.text = element_text(size = 11),
-        axis.text.x = element_text(angle = 45, hjust = 1),
-        axis.title = element_text(size = 13),
-        
-        # Legend
-        legend.position = "bottom",
-        legend.text = element_text(size = 11),
-        legend.title = element_text(size = 11),
-        legend.direction = "horizontal",
-        legend.margin = margin(20, 0, 0, 0),
-        
-        # Panel spacing (important for faceted plots)
-        panel.spacing = unit(1.2, "lines"),
-        
-        # Grid styling
-        panel.grid.minor = element_blank(),
-        
-        # Outer box
-        plot.background = element_rect(
-          fill = "white", 
-          color = "black", 
-          linewidth = 0.5
-        ),
-        
-        plot.margin = margin(10, 5, 15, 5)
-    )
-}
-
-
-# Create Flavivirus plot
-flavi_plot <- plot_antigen_dynamics(
-  data = plot_data %>% filter(pathogen %in% c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV"))
-)
-print(flavi_plot)
-# Create Alphavirus plot  
-alpha_plot <- plot_antigen_dynamics(
-  data = plot_data %>% filter(pathogen %in% c("CHIKV", "ONNV", "MAYV", "RRV"))
-)
-print(alpha_plot)
-# Save plots
-ggsave("/Users/ap2488/Desktop/supervised_learning_flavi/FinalLuminexClassification/flavivirus_IgG_dynamics.png", 
-flavi_plot, width = 16, height = 10)
-
-# save file 
+# save preprocessed data for downstream analysis 
 write.csv(clean_HI_ratio_df,
-"/Users/ap2488/Desktop/supervised_learning_flavi/FinalLuminexClassification/clean_HI_ratio_df.csv")
+"Results/preprocessed_cebu_data.csv")
+
+
+
+# --- calculate  post / pre ratios and extract crosssectional data 
+processed_dfs <- prepare_luminex_datasets(clean_HI_ratio_df, patient_pcr_mapping, antigen_cols, pre_threshold = -1)
+
+
+# Save each dataset separately (easier to load individually later)
+saveRDS(processed_dfs$ratio,"Results/ratio_df.rds")
+saveRDS(processed_dfs$cross_sectional_data, "Results/cross_sectional_df.rds")
