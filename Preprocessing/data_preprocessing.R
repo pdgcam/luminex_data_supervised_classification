@@ -109,6 +109,9 @@ validation_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/M
 random_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/MIA_DataBaseOut_RandomSubset.csv")
 cebu_mutiple_antigens <- read_excel("/Users/ap2488/Desktop/supervised_learning_flavi/db_philippines_IgG_IgA_IgM_avidity.xlsx")
 
+min(cebu_mutiple_antigens$RAU)
+
+
 # align patient IDs / PCR cols across datasets
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
@@ -119,6 +122,9 @@ cebu_pivot <- cebu_mutiple_antigens %>%
     names_from = antigen,
     values_from = RAU
   )
+
+unique(cebu_pivot$isotype)
+
 
 # --- Add col: days_since_infection 
 cebu_pivot_days_since_inf  <- cebu_pivot %>%
@@ -203,40 +209,50 @@ patients_to_exclude <- HI_ratio_df %>%
 clean_HI_ratio_df <- HI_ratio_df %>%
   filter(!id_patient %in% patients_to_exclude)
 
+View(clean_HI_ratio_df)
+
 # excluded IDs: 
 # "CPC-C-0277-00" #all HI log mean = NA unknown if subclinical
 # "CPC-C-0329-00" #all HI log mean = NA unknown if subclinical
 # "CPC-C-0068-00" # subclinical using log(1.6) threshold
 
 
+
+#  ---- Antigens and isotypes interest 
 antigen_cols <- c(
-  "CHIKV_E2","CHIKV_NSP123",
-  "CHIKV_VLP","DENV1_DIII","DENV1_NS1",
-  "DENV1_VLP","DENV2_DIII","DENV2_NS1",
-  "DENV2_VLP","DENV3_DIII","DENV3_NS1",
-  "DENV3_VLP", "DENV4_DIII","DENV4_NS1",
-  "DENV4_VLP","JEV_E","JEV_NS1", "MAYV_E2",
-  "ONNV_E2","ONNV_VLP","OROV_Gc","OROV_Gn",
-  "OROV_NP_Clinisciences","OROV_NP_NA",
-  "RR","RVFV","USUV_NS1","WNV_DIII",
-  "WNV_NS1","YFV_E","YFV_NS1","ZIKV_NS1",
-  "ZIKV_VLP","ZIKVAS_DIII", "ZIKVSU_NS1",
-  "SHERPADES_CHIKV_E2", "SHERPADES_DENV1_DIII",
-  "SHERPADES_DENV2_DIII","SHERPADES_DENV3_DIII",
-  "SHERPADES_DENV4_DIII","SHERPADES_JEV_DIII",
-  "SHERPADES_MAYV_E2","SHERPADES_RR",
-  "SHERPADES_RVFV","SHERPADES_USUV_DIII",
-  "SHERPADES_WNV_DIII","SHERPADES_YFV_DIII",
-  "SHERPADES_ZIKV_DIII"
+  "CHIKV_E2","CHIKV_NSP123","CHIKV_VLP","SHERPADES_CHIKV_E2",
+  "DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
+  "DENV2_DIII","DENV2_NS1","DENV2_VLP", "SHERPADES_DENV2_DIII",
+  "DENV3_DIII","DENV3_NS1","DENV3_VLP", "SHERPADES_DENV3_DIII",
+  "DENV4_DIII","DENV4_NS1","DENV4_VLP",  "SHERPADES_DENV4_DIII",
+  "JEV_E","JEV_NS1","SHERPADES_JEV_DIII",
+  "MAYV_E2","SHERPADES_MAYV_E2",
+  "ONNV_E2","ONNV_VLP",
+  "RR", "SHERPADES_RR",
+  "WNV_DIII","WNV_NS1","SHERPADES_WNV_DIII",
+  "YFV_E","YFV_NS1", "SHERPADES_YFV_DIII",
+  "ZIKV_NS1","ZIKV_VLP","ZIKVAS_DIII", "ZIKVSU_NS1","SHERPADES_ZIKV_DIII"
 )
 
+isotypes <- c("IgG", "IgA", "IgM") # not using avidity currently 
 
-# log antigen cols for downstream analysis 
-clean_HI_ratio_df[antigen_cols] <- 
-  log2(clean_HI_ratio_df[antigen_cols])
+# renmae 
+final_preprocessed_data <- clean_HI_ratio_df
+
+# extract IgG, IgA and IgM isotypes
+final_preprocessed_data <- final_preprocessed_data %>% filter(isotype %in% isotypes)
+
+# keep unlogged data 
+final_preprocessed_data_raw <- final_preprocessed_data
+
+# Create the logged version as a separate dataframe
+final_preprocessed_data_log <- final_preprocessed_data
+final_preprocessed_data_log[antigen_cols] <- log2(final_preprocessed_data_log[antigen_cols])
+
+
 
 # Create patient-level mapping
-patient_pcr_mapping <- clean_HI_ratio_df %>%
+patient_pcr_mapping <- final_preprocessed_data_raw %>%
   group_by(id_patient) %>%
   summarise(
     # Check what PCR results this patient has
@@ -278,13 +294,16 @@ colnames(target_counts) <- c("Target", "Count")
 write.csv(target_counts, "Results/target_counts.csv", row.names = FALSE)
 
 # save preprocessed data for downstream analysis 
-write.csv(clean_HI_ratio_df,
-"Results/preprocessed_cebu_data.csv")
+write.csv(final_preprocessed_data_raw,
+"Results/raw_preprocessed_cebu_data.csv")
+
+write.csv(final_preprocessed_data_log,
+"Results/logged_preprocessed_cebu_data.csv")
 
 
 
-# --- calculate  post / pre ratios and extract crosssectional data 
-processed_dfs <- prepare_luminex_datasets(clean_HI_ratio_df, patient_pcr_mapping, antigen_cols, pre_threshold = -1)
+# --- calculate  post / pre ratios and extract crosssectional data (use unloged data)
+processed_dfs <- prepare_luminex_datasets(final_preprocessed_data_raw, patient_pcr_mapping, antigen_cols, pre_threshold = -1)
 
 
 # Save each dataset separately (easier to load individually later)

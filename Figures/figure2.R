@@ -2,7 +2,7 @@
 library(grid)
 
 # import ratio df 
-preprocessed_cebu_data <- read.csv('Results/preprocessed_cebu_data.csv')
+logged_preprocessed_cebu_data <- read.csv('Results/logged_preprocessed_cebu_data.csv')
 
 
 # Define antigen groups
@@ -166,10 +166,10 @@ plot_antibody_dynamics <- function(data,
 
 
 # --- IgG
-igg_data <- prepare_antibody_data(preprocessed_cebu_data, "IgG")
-igm_data <- prepare_antibody_data(preprocessed_cebu_data, "IgM")
-iga_data <- prepare_antibody_data(preprocessed_cebu_data, "IgA")
-avidity_data <- prepare_antibody_data(preprocessed_cebu_data, "avidity")
+igg_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgG")
+igm_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgM")
+iga_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgA")
+avidity_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "avidity")
 
 
 # Plot separately
