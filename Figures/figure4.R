@@ -64,14 +64,14 @@ select_targets <- function(preprocessed_data,
     
     # Map values: negative label get 0, mapped values get their code, rest get NA
     df_copy[[target]] <- ifelse(
-      tgt_chr == negative_label, 
+      tgt_chr %in% negative_label, 
       0,
       as.numeric(dplyr::recode(tgt_chr, !!!mp, .default = NA_real_))
     )
     
     # Remove negatives for classifications that only include infected samples (eg: given infection, classify dengue vs chik)
     if (target %in% c("dengue_chik", "dengue_serotype")) {
-      df_copy <- df_copy[df_copy$target != "negative", ]
+      df_copy <- df_copy[!df_copy$target %in% negative_label, ]
     }
 
     # convert to factor with labels
@@ -184,14 +184,14 @@ train_multiple_targets <- function(
   combined_comparison <- do.call(rbind, all_comparisons)
   rownames(combined_comparison) <- NULL
   # Reorder columns to put Target first
-  col_order <- c("Target", setdiff(names(combined_comparison), "Target"))
+  col_order <- c("target", setdiff(names(combined_comparison), "target"))
   combined_comparison <- combined_comparison[, col_order]
   
   # Combine all predictions dataframes
   combined_predictions <- dplyr::bind_rows(all_predictions)
   rownames(combined_predictions) <- NULL
   # Reorder columns to put Target first
-  pred_col_order <- c("Target", setdiff(names(combined_predictions), "Target"))
+  pred_col_order <- c("target", setdiff(names(combined_predictions), "target"))
   combined_predictions <- combined_predictions[, pred_col_order]
   
   return(list(
@@ -218,9 +218,12 @@ table(ratio_df$target)
 data_with_binomial_targets <- select_targets(
   preprocessed_data = ratio_df,
   targets = c("flavi", "dengue"),
-  drop_original_target = TRUE
+  drop_original_target = FALSE,
+  negative_label =  c("negative", "CHIKV")  # both treated as class 0
 )
 
+table(data_with_binomial_targets$flavi$flavi)
+sum(is.na(data_with_binomial_targets$dengue$zika))
 # Drop Nas
 data_with_binomial_targets$flavi <- na.omit(data_with_binomial_targets$flavi)
 data_with_binomial_targets$dengue <- na.omit(data_with_binomial_targets$dengue)
@@ -237,8 +240,8 @@ binomial_modeling_results <- train_multiple_targets(
   k_fold = 5,
   metrics = c("AUROC", "AUPRC", "Brier")
 )
-
-
+warnings()
+traceback()
 binomial_modeling_results$combined_comparison
 
 # --- Multinomial Results 

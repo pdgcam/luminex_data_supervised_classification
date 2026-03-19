@@ -169,7 +169,6 @@ plot_antibody_dynamics <- function(data,
 igg_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgG")
 igm_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgM")
 iga_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgA")
-avidity_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "avidity")
 
 
 # Plot separately
