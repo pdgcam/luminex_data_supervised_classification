@@ -10,9 +10,7 @@ select_targets <- function(preprocessed_data,
                            targets = c("flavi", "dengue", 
                                        "zika", "dengue_zika", 
                                        "dengue_serotype", "dengue_serotype_neg",
-                                       "dengue_chik"),
-                           drop_original_target = TRUE, 
-                           negative_label = "negative") {
+                                       "dengue_chik"), drop_original_target = TRUE,  negative_label = "negative", min_samples = 1) {
   
   if (!"target" %in% names(preprocessed_data)) {
     stop('Column "Target" not found in preprocessed_data.')
@@ -80,6 +78,19 @@ select_targets <- function(preprocessed_data,
       factor(df_copy[[target]], 
              levels = spec$levels, 
              labels = spec$labels)
+
+    # Drop classes with fewer than min_samples
+    class_counts <- table(df_copy[[target]])
+    valid_classes <- names(class_counts[class_counts >= min_samples])
+    
+    if (length(valid_classes) < length(class_counts)) {
+      dropped <- names(class_counts[class_counts < min_samples])
+      cat(sprintf("Target '%s': dropping class(es) with < %d samples: %s\n",
+                  target, min_samples, paste(dropped, collapse = ", ")))
+      df_copy <- df_copy[df_copy[[target]] %in% valid_classes, ]
+      df_copy[[target]] <- droplevels(df_copy[[target]])  # remove unused factor levels
+    }
+    
     
     # drop original Target column if requested
     if (drop_original_target) {
@@ -219,7 +230,8 @@ data_with_binomial_targets <- select_targets(
   preprocessed_data = ratio_df,
   targets = c("flavi", "dengue"),
   drop_original_target = FALSE,
-  negative_label =  c("negative", "CHIKV")  # both treated as class 0
+  negative_label =  c("negative", "CHIKV"),  # both treated as class 0
+  min_samples = 2
 )
 
 table(data_with_binomial_targets$flavi$flavi)
@@ -240,20 +252,24 @@ binomial_modeling_results <- train_multiple_targets(
   k_fold = 5,
   metrics = c("AUROC", "AUPRC", "Brier")
 )
-warnings()
-traceback()
+
 binomial_modeling_results$combined_comparison
+
 
 # --- Multinomial Results 
 data_with_multinomial_targets <- select_targets(
   preprocessed_data = ratio_df,
   targets = c("dengue_serotype", "dengue_serotype_neg"),
-  drop_original_target = TRUE
+  drop_original_target = TRUE, 
+  min_samples = 2
 )
+
 
 # Drop Nas
 data_with_multinomial_targets$dengue_serotype <- na.omit(data_with_multinomial_targets$dengue_serotype)
 data_with_multinomial_targets$dengue_serotype_neg <- na.omit(data_with_multinomial_targets$dengue_serotype_neg)
+
+#remove DENV3 -- only one samples 
 
 # View distribution of targets
 table(data_with_multinomial_targets$dengue_serotype$dengue_serotype)
@@ -266,7 +282,8 @@ dengue_serotype_results <- train_multiple_targets(
   variables = NULL,
   k_fold = "LOOCV", 
   metrics = c("AUROC", "AUPRC", "Brier", "StratBrier"))
+warnings()
 
 
-
+View(dengue_serotype_results$combined_comparison)
 # Model results table 
