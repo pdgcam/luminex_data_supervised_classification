@@ -1,5 +1,4 @@
-  
-# ---- Multinomial analysis ----
+  # ---- Multinomial analysis ----
 train_multinomial_models <- function(
     data,
     target,
@@ -41,7 +40,7 @@ train_multinomial_models <- function(
   }
   
   class_levels <- levels(model_data[[target]])
-  n_classes <- length(class_levels) 
+  n_classes    <- length(class_levels) 
   n_samples    <- nrow(model_data)
   
   cat(sprintf("Multinomial classification with %d classes: %s\n", 
@@ -66,28 +65,28 @@ train_multinomial_models <- function(
     
     if (length(y_true) == 0) {
       return(c( 
-        Accuracy = NA_real_,
-        AUC_Macro = NA_real_,
-        AUC_Micro = NA_real_,
+        Accuracy    = NA_real_,
+        AUC_Macro   = NA_real_,
+        AUC_Micro   = NA_real_,
         AUPRC_Macro = NA_real_,
         AUPRC_Micro = NA_real_,
-        Brier = NA_real_,
-        StratBrier = NA_real_
+        Brier       = NA_real_,
+        StratBrier  = NA_real_
       ))
     }
     
-    # Ensure factors for confusion matrix
+    # Ensure factors
     y_true <- factor(y_true, levels = lev)  
     y_pred <- factor(y_pred, levels = lev)  
     
     # Accuracy
     acc <- mean(y_pred == y_true, na.rm = TRUE)
     
-    # One-vs-Rest metrics for each class
+    # One-vs-Rest AUC and AUPRC per class
     auc_per_class   <- numeric(length(lev))  
     auprc_per_class <- numeric(length(lev)) 
     
-    # micro-averaging AUC/AUPRC
+    # Containers for micro-averaging
     all_y_binary <- c()
     all_p_class  <- c()
     
@@ -96,39 +95,53 @@ train_multinomial_models <- function(
       y_binary <- as.integer(y_true == class_k)
       p_class  <- y_proba[, k]
       
-      # Store for micro calculation
+      # Accumulate for micro averaging
       all_y_binary <- c(all_y_binary, y_binary)
-      all_p_class  <- c(all_p_class, p_class)
+      all_p_class  <- c(all_p_class,  p_class)
       
+      # Skip if only one class present (e.g. during LOOCV folds)
       if (length(unique(y_binary)) < 2) {
         auc_per_class[k]   <- NA_real_
         auprc_per_class[k] <- NA_real_
         next
       }
       
-      # AUC
-      auc_per_class[k] <- tryCatch({
-        MLmetrics::AUC(p_class, y_binary)
-      }, error = function(e) NA_real_)
-      
+      # AUC (pROC with explicit direction to avoid flipping)
+     auc_per_class[k] <- tryCatch({
+    roc_obj <- pROC::roc(
+      response  = y_binary,
+      predictor = p_class,
+      levels    = c(0, 1),   # 0 = negative, 1 = positive
+      direction = "<",        # predictor increases with positive class
+      quiet     = TRUE
+    )
+    as.numeric(pROC::auc(roc_obj))
+  }, error = function(e) NA_real_)
+        
       # AUPRC
       auprc_per_class[k] <- tryCatch({
         MLmetrics::PRAUC(p_class, y_binary)
       }, error = function(e) NA_real_)
     }
     
-    auc_macro  <- mean(auc_per_class,   na.rm = TRUE)
+    auc_macro   <- mean(auc_per_class,   na.rm = TRUE)
     auprc_macro <- mean(auprc_per_class, na.rm = TRUE)
     
-    # Micro averages (all OvR comparisons pooled)
+    # Micro AUC (all OvR comparisons pooled)
     auc_micro <- tryCatch({
-      if(length(unique(all_y_binary)) >= 2) {
-        MLmetrics::AUC(all_p_class, all_y_binary) 
+      if (length(unique(all_y_binary)) >= 2) {
+        as.numeric(pROC::auc(
+          response  = all_y_binary,
+          predictor = all_p_class,
+          direction = "<",
+          quiet     = TRUE
+        ))
       } else {
         NA_real_
       }
     }, error = function(e) NA_real_)
     
+    # Micro AUPRC
     auprc_micro <- tryCatch({
       if (length(unique(all_y_binary)) >= 2) {
         MLmetrics::PRAUC(all_p_class, all_y_binary) 
@@ -143,16 +156,14 @@ train_multinomial_models <- function(
     for (k in seq_along(lev)) {  
       y_true_matrix[, k] <- as.integer(y_true == lev[k])  
     }
-    # multi-class Brier:
     brier <- mean((y_proba - y_true_matrix)^2)
     
-    # ---- Stratified Brier (class-weighted) ----
+    # ---- Stratified Brier (equal weight per class) ----
     brier_per_class <- numeric(length(lev))  
     names(brier_per_class) <- lev 
     for (k in seq_along(lev)) {  
       idx_k <- y_true == lev[k]  
       if (sum(idx_k) > 0) {
-        # Brier score for samples in class k
         brier_per_class[k] <- mean(rowSums(
           (y_proba[idx_k, , drop = FALSE] - y_true_matrix[idx_k, , drop = FALSE])^2
         ))
@@ -160,77 +171,73 @@ train_multinomial_models <- function(
         brier_per_class[k] <- NA_real_
       }
     }
-    # Equal weight to each class (balanced)
     strat_brier <- mean(brier_per_class, na.rm = TRUE)
     
     c(
-      Accuracy       = acc,
-      AUC_Macro      = auc_macro,
-      AUC_Micro      = auc_micro,
-      AUPRC_Macro    = auprc_macro,
-      AUPRC_Micro    = auprc_micro,
-      Brier          = brier,
-      StratBrier     = strat_brier
+      Accuracy    = acc,
+      AUC_Macro   = auc_macro,
+      AUC_Micro   = auc_micro,
+      AUPRC_Macro = auprc_macro,
+      AUPRC_Micro = auprc_micro,
+      Brier       = brier,
+      StratBrier  = strat_brier
     )
   }
   
   # ---- Create trainControl ----
   if (k_fold == "LOOCV") {
     multi_control <- caret::trainControl(
-      method = "LOOCV",
+      method          = "LOOCV",
       summaryFunction = calculate_multiclass_metrics,
-      classProbs = TRUE,
-      verboseIter = FALSE,
+      classProbs      = TRUE,
+      verboseIter     = FALSE,
       savePredictions = "all",
-      allowParallel = FALSE
+      allowParallel   = FALSE
     )
     cv_folds <- NULL
-  } 
-  else {
+  } else {
     cv_folds <- caret::createFolds(model_data[[target]], k = k_fold)
     train_indices <- lapply(cv_folds, function(test_idx) {
       setdiff(seq_len(nrow(model_data)), test_idx)
     })
     multi_control <- caret::trainControl(
+      method          = "cv",
       summaryFunction = calculate_multiclass_metrics,
-      method = "cv",
-      classProbs = TRUE,
-      verboseIter = FALSE,
+      classProbs      = TRUE,
+      verboseIter     = FALSE,
       savePredictions = "all",
-      index = train_indices
+      index           = train_indices
     )
   }
   
   # ---- Train Models ----
-  # Random Forest 
   cat("Training Random Forest (multiclass)\n")
   rf_model <- tryCatch({
     caret::train(
       as.formula(paste(target, "~ .")),
-      data = model_data,
-      metric = "AUC_Micro",
-      method = "ranger",
+      data       = model_data,
+      metric     = "AUC_Micro",
+      method     = "ranger",
       tuneLength = 3,
-      num.trees = 500,
-      trControl = multi_control
+      num.trees  = 500,
+      trControl  = multi_control
     )
   }, error = function(e) {
     cat("Random Forest training failed:", e$message, "\n")
     NULL
   })
   
-  # Naive Bayes
   cat("Training Naive Bayes\n")
   nb_model <- tryCatch({
     caret::train(
       as.formula(paste(target, "~ .")),
-      data = model_data,
-      method = "nb",
-      metric = "AUC_Micro",
+      data      = model_data,
+      method    = "nb",
+      metric    = "AUC_Micro",
       trControl = multi_control
     )
   }, error = function(e) {
-    cat("NB training failed:", e$message, "\n")
+    cat("Naive Bayes training failed:", e$message, "\n")
     NULL
   })
   
@@ -238,27 +245,24 @@ train_multinomial_models <- function(
   all_predictions <- list()
   
   if (!is.null(rf_model)) {
-    rf_preds <- rf_model$pred %>%
+    all_predictions$rf <- rf_model$pred %>%
       dplyr::mutate(Model = "Random Forest")
-    all_predictions$rf <- rf_preds
   }
   
   if (!is.null(nb_model)) {
-    nb_preds <- nb_model$pred %>%
+    all_predictions$nb <- nb_model$pred %>%
       dplyr::mutate(Model = "NaiveBayes")
-    all_predictions$nb <- nb_preds
   }
   
-  # Ensure each preds df has all class prob columns
+  # Ensure each predictions df has all class probability columns
   ensure_prob_cols <- function(df, classes) {
     missing <- setdiff(classes, names(df))
     for (cl in missing) df[[cl]] <- NA_real_
     df[, c(setdiff(names(df), classes), classes)]
   }
-  
   all_predictions <- lapply(all_predictions, ensure_prob_cols, classes = class_levels)
   
-  # Combine all predictions
+  # Combine predictions
   combined_preds <- dplyr::bind_rows(all_predictions) %>%
     dplyr::select(Model, rowIndex, obs, pred, dplyr::all_of(class_levels)) %>%
     dplyr::rename(
@@ -266,45 +270,39 @@ train_multinomial_models <- function(
       pred_class = pred
     )
   
-  # Prepare data in format expected by calculate_multiclass_metrics
+  # ---- Compute OOF Metrics ----
   compute_metrics_wrapper <- function(df) {
     data_for_calc <- df %>%
       dplyr::rename(obs = obs_class, pred = pred_class)
     
-    metrics <- calculate_multiclass_metrics(
-      data = data_for_calc,
-      lev = class_levels,  
+    result <- calculate_multiclass_metrics(
+      data  = data_for_calc,
+      lev   = class_levels,  
       model = NULL
     )
-    tibble::as_tibble(t(metrics))
+    tibble::as_tibble(t(result))
   }
   
-  # Compute OOF metrics
   oof_metrics <- combined_preds %>%
     dplyr::group_by(Model) %>%
     dplyr::group_modify(~ compute_metrics_wrapper(.x)) %>%
     dplyr::ungroup()
   
-  
-  # ---- Extract and Compile Results ----
+  # ---- Compile and Return ----
   trained_models <- Filter(Negate(is.null), list(
     rf = rf_model,
     nb = nb_model
   ))
-
-  comparison_df <- oof_metrics
   
-  # ---- Return Results ----
   return(list(
-    models = trained_models,
-    predictions = combined_preds,
-    oof_metrics = oof_metrics,
-    comparison = comparison_df,
-    cv_folds = cv_folds,
+    models         = trained_models,
+    predictions    = combined_preds,
+    oof_metrics    = oof_metrics,
+    comparison     = oof_metrics,
+    cv_folds       = cv_folds,
     variables_used = variables,
-    target_used = target,
-    k_fold = k_fold,
-    metrics = metrics
+    target_used    = target,
+    k_fold         = k_fold,
+    metrics        = metrics
   ))
 }
-  

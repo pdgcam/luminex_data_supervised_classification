@@ -8,9 +8,10 @@ source(here('Models/train_multinomial_models.R'))
 # Functions to select targets / classification questions 
 select_targets <- function(preprocessed_data,
                            targets = c("flavi", "dengue", 
-                                       "zika", "dengue_zika", 
-                                       "dengue_serotype", "dengue_serotype_neg",
-                                       "dengue_chik"), drop_original_target = TRUE,  negative_label = "negative", min_samples = 1) {
+                                       "zika", "chik",
+                                       "dengue_zika",  "dengue_chik",
+                                       "dengue_serotype", "dengue_serotype_neg"), 
+                                       drop_original_target = TRUE,  negative_label = "negative", min_samples = 1) {
   
   if (!"target" %in% names(preprocessed_data)) {
     stop('Column "Target" not found in preprocessed_data.')
@@ -32,6 +33,7 @@ select_targets <- function(preprocessed_data,
     flavi               = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 1),
     dengue              = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1),
     zika                = c(ZIKV = 1),
+    chik                = c(CHIKV = 1),
     dengue_zika         = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 2),
     dengue_serotype     = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
     dengue_serotype_neg = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
@@ -42,6 +44,7 @@ select_targets <- function(preprocessed_data,
     flavi               = list(levels = c(0, 1),           labels = c("negative", "positive")),
     dengue              = list(levels = c(0, 1),           labels = c("negative", "positive")),
     zika                = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    chik                = list(levels = c(0, 1),           labels = c("negative", "positive")),
     dengue_zika         = list(levels = c(0, 1, 2),        labels = c("negative", "dengue", "zika")),
     dengue_serotype     = list(levels = c(1, 2, 3, 4),     labels = c("DENV1", "DENV2", "DENV3", "DENV4")),
     dengue_serotype_neg = list(levels = c(0, 1, 2, 3, 4),  labels = c("negative", "DENV1", "DENV2", "DENV3", "DENV4")),
@@ -218,7 +221,6 @@ train_multiple_targets <- function(
   ))
 }
 
-
 # ---- Import prepossessed datasets ---- 
 ratio_df <- readRDS('Results/ratio_df.rds')
 table(ratio_df$target)
@@ -234,16 +236,26 @@ data_with_binomial_targets <- select_targets(
   min_samples = 2
 )
 
-table(data_with_binomial_targets$flavi$flavi)
-sum(is.na(data_with_binomial_targets$dengue$zika))
+data_with_binomial_targets_chik <- select_targets(
+  preprocessed_data = ratio_df,
+  targets = c("chik", "dengue_chik"),
+  drop_original_target = FALSE,
+  negative_label =  c("negative"),  # both treated as class 0
+  min_samples = 2
+)
+
+
 # Drop Nas
 data_with_binomial_targets$flavi <- na.omit(data_with_binomial_targets$flavi)
 data_with_binomial_targets$dengue <- na.omit(data_with_binomial_targets$dengue)
 data_with_binomial_targets$zika <- na.omit(data_with_binomial_targets$zika)
+data_with_binomial_targets_chik$dengue_chik <- na.omit(data_with_binomial_targets_chik$dengue_chik)
+
 
 # View distribution of targets
 table(data_with_binomial_targets$flavi$flavi)
 table(data_with_binomial_targets$dengue$dengue)
+table((data_with_binomial_targets_chik$dengue_chik$dengue_chik))
 
 # Fit binomial models
 binomial_modeling_results <- train_multiple_targets(
@@ -253,7 +265,17 @@ binomial_modeling_results <- train_multiple_targets(
   metrics = c("AUROC", "AUPRC", "Brier")
 )
 
+# Fit binomial model - for dengue vs chik 
+binomial_modeling_results_dengue_chik <- train_multiple_targets(
+  data_list = data_with_binomial_targets_chik,
+  variables = NULL,  # Uses all columns except target
+  k_fold = 5,
+  metrics = c("AUROC", "AUPRC", "Brier")
+)
+
+# results
 binomial_modeling_results$combined_comparison
+binomial_modeling_results_dengue_chik$combined_comparison
 
 
 # --- Multinomial Results 
@@ -263,7 +285,6 @@ data_with_multinomial_targets <- select_targets(
   drop_original_target = TRUE, 
   min_samples = 2
 )
-
 
 # Drop Nas
 data_with_multinomial_targets$dengue_serotype <- na.omit(data_with_multinomial_targets$dengue_serotype)
@@ -282,8 +303,51 @@ dengue_serotype_results <- train_multiple_targets(
   variables = NULL,
   k_fold = "LOOCV", 
   metrics = c("AUROC", "AUPRC", "Brier", "StratBrier"))
-warnings()
 
 
-View(dengue_serotype_results$combined_comparison)
-# Model results table 
+dengue_serotype_results$combined_comparison
+levels(data_with_multinomial_targets$dengue_serotype$dengue_serotype)
+
+# Micro-average "takes imbalance into account" in the sense that the resulting performance is based on the proportion of every class
+# i.e.the performance of a large class has more impact on the result than of a small class.
+# Macro-average "doesn't take imbalance into account" in the sense that the resulting performance 
+# is a simple average over the classes, so every class is given equal weight independently from their proportion.
+
+# Reporting Micro Average AUC 
+
+# ---- Best from binomial results ----
+best_binomial <- bind_rows(
+  binomial_modeling_results$combined_comparison,
+  binomial_modeling_results_dengue_chik$combined_comparison
+) %>%
+  group_by(target) %>%
+  slice_max(AUROC, n = 1) %>%
+  ungroup() %>%
+  rename(AUC = AUROC) %>%
+  mutate(type = "binary")
+
+
+# ---- Best from multinomial results ----
+best_multinomial <- dengue_serotype_results$combined_comparison %>%
+  group_by(target) %>%
+  slice_max(AUC_Micro, n = 1) %>%
+  ungroup() %>%
+  rename(AUC = AUC_Micro) %>%
+  mutate(type = "multinomial")
+
+
+# ---- Combine into summary table ----
+best_models <- bind_rows(
+  best_binomial %>% dplyr::select(type, target, Model, AUC, AUPRC, Brier),
+  best_multinomial %>% dplyr::select(type, target, Model, AUC = AUC, 
+                               AUPRC = AUPRC_Micro, Brier)
+) %>%
+  arrange(type, target)
+
+print(best_models)
+
+
+
+# Univariate Analysis - look at each antigen independently 
+
+
