@@ -252,7 +252,7 @@ train_multiple_targets_univariate <- function(
     current_data[[target_col]] <-  factor(current_data[[target_col]])
     
     # If variables not specified, use all columns except target
-    if (is.null(variables)) {
+      if (is.null(variables)) {
       variables <- setdiff(names(current_data), target_col)
     }
     
@@ -331,17 +331,17 @@ train_multiple_targets_univariate <- function(
     
     # Combine comparisons and predictions for this target
     if (length(target_comparisons) > 0) {
-      all_comparisons[[target_name]] <- dplyr::bind_rows(rbind, target_comparisons)
+      all_comparisons[[target_name]] <- dplyr::bind_rows(target_comparisons)
     }
     if (length(target_predictions) > 0) {
-      all_predictions[[target_name]] <- dplyr::bind_rows(rbind, target_predictions)
+      all_predictions[[target_name]] <- dplyr::bind_rows(target_predictions)
     }
   }
   
   # Combine all comparison dataframes across targets
   combined_comparison <- NULL
   if (length(all_comparisons) > 0) {
-    combined_comparison <- dplyr::bind_rows(rbind, all_comparisons)
+    combined_comparison <- dplyr::bind_rows(all_comparisons)
     rownames(combined_comparison) <- NULL
     # Reorder columns to put Target and Variable first
     col_order <- c("Target", "Variable", setdiff(names(combined_comparison), c("Target", "Variable")))
@@ -351,7 +351,7 @@ train_multiple_targets_univariate <- function(
   # Combine all predictions dataframes across targets
   combined_predictions <- NULL
   if (length(all_predictions) > 0) {
-    combined_predictions <- dplyr::bind_rows(rbind, all_predictions)
+    combined_predictions <- dplyr::bind_rows(all_predictions)
     rownames(combined_predictions) <- NULL
     # Reorder columns to put Target and Variable first
     pred_col_order <- c("Target", "Variable", setdiff(names(combined_predictions), c("Target", "Variable")))
@@ -408,6 +408,7 @@ sum(is.na(data_with_binomial_targets$flavi$zika))
 table(data_with_binomial_targets$flavi$flavi)
 table(data_with_binomial_targets$dengue$dengue)
 table((data_with_binomial_targets_chik$dengue_chik$dengue_chik))
+table((data_with_binomial_targets_chik$chik$chik))
 
 
 # Fit binomial models
@@ -417,7 +418,6 @@ binomial_modeling_results <- train_multiple_targets(
   k_fold = 5,
   metrics = c("AUROC", "AUPRC", "Brier"))
 
-binomial_modeling_results$combined_comparison
 
 # Fit binomial model - for dengue vs chik 
 binomial_modeling_results_dengue_chik <- train_multiple_targets(
@@ -439,6 +439,10 @@ data_with_multinomial_targets <- select_targets(
   drop_original_target = TRUE, 
   min_samples = 2
 )
+
+sum(is.na(data_with_multinomial_targets$dengue_serotype$dengue_serotype))
+sum(is.na(data_with_multinomial_targets$dengue_serotype_neg$dengue_serotype_neg))
+
 
 # Drop Nas
 data_with_multinomial_targets$dengue_serotype <- na.omit(data_with_multinomial_targets$dengue_serotype)
@@ -501,7 +505,7 @@ print(best_models)
 # Univariate Analysis - look at each antigen independently 
 serotype_variables_flavi <- grep("DENV|ZIKV", names(ratio_df), value = TRUE)
 serotype_variables_alpha <- grep("CHIKV|ONNV|MAYV", names(ratio_df), value = TRUE)
-serotype_variables_alpha
+
 
 univariate_results_flavi <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets,
@@ -510,6 +514,7 @@ univariate_results_flavi <- train_multiple_targets_univariate(
   metrics    = c("AUROC", "AUPRC", "Brier"),
 )
 
+univariate_results_flavi$combined_comparison
 
 univariate_results_alpha <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets_chik,
@@ -525,50 +530,38 @@ model_colours <- c(
   "SVM" = "#de5a7b"
 )
 
-univariate_plot_dengue <- univariate_results_flavi$combined_comparison %>%
-  filter(Target == "dengue") %>%
-  dplyr::select(Target, Variable, Model, AUROC) %>%
-  pivot_longer(cols = AUROC, names_to = "Metric", values_to = "Value") %>%
-  group_by(Variable) %>%
-  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
-  ungroup() %>%
-  mutate(Variable = reorder(Variable, mean_auc))
-
-ggplot(
-  univariate_plot_dengue,
-  aes(x = Value, y = Variable, color = Model, shape = Model)
+univariate_plot_dengue <- ggplot(
+  univariate_plot_data_dengue,
+  aes(x = Variable, y = Value, color = Model, shape = Model)  # x/y swapped, no coord_flip
 ) +
-  geom_vline(xintercept = 0.5, linetype = "dashed", colour = "grey70") +
-  geom_point(size = 4, alpha = 0.9) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "#8f0000") +
+  geom_point(size = 5, alpha = 0.9) +
   facet_grid(Metric ~ ., scales = "free_y") +
-  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
   scale_color_manual(values = model_colours) +
-  theme_minimal(base_size = 16) +
+  theme_minimal() +
   theme(
-    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    axis.text.y = element_text(size = 12),
-    axis.text.x = element_text(size = 12),
-    axis.title.x = element_text(size = 14, face = "bold"),
-    axis.title.y = element_blank(),
-    strip.text = element_text(size = 14, face = "bold"),
-    strip.background = element_rect(fill = "grey95", colour = NA),
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank(),
-    panel.grid.major.x = element_line(colour = "grey85"),
+    axis.text.x  = element_text(size = 16, angle = 55, hjust = 1),  # variable names angled
+    axis.text.y  = element_text(size = 18),
+    axis.title.y = element_text(size = 20),   # AUROC on the LEFT
+    axis.title.x = element_blank(),
+    strip.background = element_rect(fill = "#ffffff", colour = NA),
+    panel.background = element_rect(fill = "white", colour = NA),
+    plot.background  = element_rect(fill = "white", colour = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(colour = "grey85"),
+    strip.text = element_blank(),   # hides the "AUROC" facet strip
     legend.title = element_blank(),
-    legend.text = element_text(size = 12),
-    legend.position = "bottom"
+    legend.text  = element_text(size = 20),
+    legend.position = "bottom",
+    plot.margin = margin(10, 10, 10, 10)  # breathing room
   ) +
   labs(
-    x = "AUROC",
-    y = NULL
+    y = "AUROC",
+    x = NULL
   )
 
+ggsave("Results/univariate_plot_dengue.png",
+       univariate_plot_dengue, width = 30, height = 8, dpi = 300)
 
-caret::varImp(binomial_modeling_results$models$dengue$GLMnet)
-caret::varIm(binomial_modeling_results$results_by_target$dengue$predictions$Model)
-
-
-names(binomial_modeling_results)
-str(binomial_modeling_results, max.level = 2)
