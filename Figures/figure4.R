@@ -514,8 +514,6 @@ univariate_results_flavi <- train_multiple_targets_univariate(
   metrics    = c("AUROC", "AUPRC", "Brier"),
 )
 
-univariate_results_flavi$combined_comparison
-
 univariate_results_alpha <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets_chik,
   variables  = serotype_variables_alpha,
@@ -530,38 +528,142 @@ model_colours <- c(
   "SVM" = "#de5a7b"
 )
 
+plot_df_dengue <- univariate_results_flavi$combined_comparison %>%
+  filter(Target == "dengue") %>%
+  dplyr::select(Target, Variable, Model, AUROC) %>%
+  pivot_longer(cols = AUROC, names_to = "Metric", values_to = "Value") %>%
+  group_by(Variable) %>%
+  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+var_order_dengue <- plot_df_dengue %>%
+  distinct(Variable, mean_auc) %>%
+  arrange(desc(mean_auc)) %>%
+  mutate(
+    Variable_clean = Variable %>%
+      str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
+      str_replace("SHERPADES_", "SHERPADES ") %>%
+      str_replace_all("_", " ") %>%
+      str_wrap(width = 14)
+  ) %>%
+  mutate(
+    Variable_clean = factor(Variable_clean, levels = Variable_clean)
+  )
+
+# Join labels back and explicitly set factor order
+plot_df_dengue <- plot_df_dengue %>%
+  left_join(
+    var_order_dengue %>% dplyr::select(Variable, Variable_clean),
+    by = "Variable"
+  ) %>%
+  mutate(
+    Variable_clean = factor(
+      Variable_clean,
+      levels = var_order_dengue$Variable_clean
+    )
+  )
+
+
 univariate_plot_dengue <- ggplot(
-  univariate_plot_data_dengue,
-  aes(x = Variable, y = Value, color = Model, shape = Model)  # x/y swapped, no coord_flip
+  plot_df_dengue,
+  aes(x = Value, y = Variable_clean, color = Model, shape = Model)
 ) +
-  geom_hline(yintercept = 1, linetype = "dashed", colour = "#8f0000") +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
   geom_point(size = 5, alpha = 0.9) +
-  facet_grid(Metric ~ ., scales = "free_y") +
-  scale_y_continuous(limits = c(0, 1)) +
+  facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
+  scale_x_continuous(limits = c(0, 1)) +
+  coord_flip() +
   scale_color_manual(values = model_colours) +
   theme_minimal() +
   theme(
-    axis.text.x  = element_text(size = 16, angle = 55, hjust = 1),  # variable names angled
-    axis.text.y  = element_text(size = 18),
-    axis.title.y = element_text(size = 20),   # AUROC on the LEFT
+    axis.text.y = element_text(size = 18), 
+    axis.text.x = element_text(size = 18, angle = 40, hjust = 1),
     axis.title.x = element_blank(),
-    strip.background = element_rect(fill = "#ffffff", colour = NA),
-    panel.background = element_rect(fill = "white", colour = NA),
-    plot.background  = element_rect(fill = "white", colour = NA),
-    panel.grid.major.x = element_blank(),
-    panel.grid.minor   = element_blank(),
-    panel.grid.major.y = element_line(colour = "grey85"),
-    strip.text = element_blank(),   # hides the "AUROC" facet strip
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "white", colour = NA),  # white background
+    plot.background  = element_rect(fill = "white", colour = NA),  # white outer bg
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey85"),
     legend.title = element_blank(),
-    legend.text  = element_text(size = 20),
+    legend.text = element_text(size = 20),
+    strip.text = element_blank(),
     legend.position = "bottom",
-    plot.margin = margin(10, 10, 10, 10)  # breathing room
-  ) +
-  labs(
-    y = "AUROC",
-    x = NULL
-  )
+    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
+  ) 
 
 ggsave("Results/univariate_plot_dengue.png",
-       univariate_plot_dengue, width = 30, height = 8, dpi = 300)
+       univariate_plot_dengue, width = 20, height = 10, dpi = 300)
+
+
+
+
+# CHIK Univariate results 
+plot_df_alpha <- univariate_results_alpha$combined_comparison %>%
+  filter(Target == "chik") %>%
+  dplyr::select(Target, Variable, Model, AUROC) %>%
+  pivot_longer(cols = AUROC, names_to = "Metric", values_to = "Value") %>%
+  group_by(Variable) %>%
+  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+var_order_alpha <- plot_df_alpha %>%
+  distinct(Variable, mean_auc) %>%
+  arrange(desc(mean_auc)) %>%
+  mutate(
+    Variable_clean = Variable %>%
+      str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
+      str_replace("SHERPADES_", "SHERPADES ") %>%
+      str_replace_all("_", " ") %>%
+      str_wrap(width = 14)
+  ) %>%
+  mutate(
+    Variable_clean = factor(Variable_clean, levels = Variable_clean)
+  )
+
+# Join labels back and explicitly set factor order
+plot_df_alpha <- plot_df_alpha %>%
+  left_join(
+    var_order_alpha %>% dplyr::select(Variable, Variable_clean),
+    by = "Variable"
+  ) %>%
+  mutate(
+    Variable_clean = factor(
+      Variable_clean,
+      levels = var_order_alpha$Variable_clean
+    )
+  )
+
+
+univariate_plot_alpha <- ggplot(
+  plot_df_alpha,
+  aes(x = Value, y = Variable_clean, color = Model, shape = Model)
+) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
+  geom_point(size = 5, alpha = 0.9) +
+  facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
+  scale_x_continuous(limits = c(0, 1)) +
+  coord_flip() +
+  scale_color_manual(values = model_colours) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 18), 
+    axis.text.x = element_text(size = 18, angle = 40, hjust = 1),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "white", colour = NA),  # white background
+    plot.background  = element_rect(fill = "white", colour = NA),  # white outer bg
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey85"),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 20),
+    strip.text = element_blank(),
+    legend.position = "bottom",
+    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
+  ) 
+
+ggsave("Results/univariate_plot_alpha.png",
+       univariate_plot_alpha, width = 20, height = 10, dpi = 300)
+
 
