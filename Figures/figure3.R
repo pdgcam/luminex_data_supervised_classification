@@ -168,7 +168,6 @@ prepare_ratio_plot_data <- function(data, antigen_suffix, flavi_targets = pcr_ta
 }
 
 
-
 plot_ratio_grid <- function(data, antigen_suffix, flavi_targets = pcr_target) {
   
   plot_inputs <- prepare_ratio_plot_data(data, antigen_suffix, flavi_targets)
@@ -221,12 +220,66 @@ plot_ratio_grid <- function(data, antigen_suffix, flavi_targets = pcr_target) {
 
     )
 }
+
+compute_zikv_column_stats <- function(data, antigen_suffix, flavi_targets = pcr_target) {
+  
+  all_zikv_ratios <- c()
+       # Map antigen names to column prefixes for specific suffixes
+    antigen_col_map <- list(
+      DIII = c(DENV1 = "DENV1", DENV2 = "DENV2", DENV3 = "DENV3", DENV4 = "DENV4", ZIKV = "ZIKVAS")
+    )
+
+    get_col_name <- function(antigen, suffix) {
+    if (suffix %in% names(antigen_col_map) && antigen %in% names(antigen_col_map[[suffix]])) {
+      paste0(antigen_col_map[[suffix]][[antigen]], "_", suffix)
+    } else {
+      paste0(antigen, "_", suffix)
+    }
+  }
+  
+  # Loop through all non-ZIKV infecting targets (off-diagonal ZIKV column)
+  for (infecting_target in flavi_targets[flavi_targets != "ZIKV"]) {
+    
+    target_data <- data %>% filter(target == infecting_target)
+    
+    infecting_col <- get_col_name(infecting_target, antigen_suffix)
+    zikv_col      <- get_col_name("ZIKV", antigen_suffix)  # "ZIKVAS_DIII"
+    
+    valid_rows <- complete.cases(target_data[, c(infecting_col, zikv_col)])
+    
+    if (sum(valid_rows) > 0) {
+      relative_ratios <- target_data[valid_rows, zikv_col] / target_data[valid_rows, infecting_col]
+      all_zikv_ratios <- c(all_zikv_ratios, relative_ratios)
+    }
+  }
+  
+  # --- Summary statistics ---
+  if (length(all_zikv_ratios) > 0) {
+    
+    overall_mean <- mean(all_zikv_ratios, na.rm = TRUE)
+    overall_q25  <- quantile(all_zikv_ratios, 0.25, na.rm = TRUE)
+    overall_q75  <- quantile(all_zikv_ratios, 0.75, na.rm = TRUE)
+    overall_iqr  <- overall_q75 - overall_q25
+    
+    below_1 <- sum(all_zikv_ratios < 1, na.rm = TRUE)
+    above_1 <- sum(all_zikv_ratios > 1, na.rm = TRUE)
+    n       <- length(all_zikv_ratios)
+    
+    cat("\nOVERALL LAST COLUMN STATISTICS (All DENV-ZIKV comparisons):\n")
+    cat(sprintf("Total samples: %d\n",        n))
+    cat(sprintf("Mean: %.3f\n",               overall_mean))
+    cat(sprintf("IQR: %.3f - %.3f (range: %.3f)\n", overall_q25, overall_q75, overall_iqr))
+    cat(sprintf("Min: %.3f\n",                min(all_zikv_ratios)))
+    cat(sprintf("Max: %.3f\n",                max(all_zikv_ratios)))
+    cat(sprintf("Values < 1.0: %d/%d (%.1f%%)\n", below_1, n, 100 * below_1 / n))
+    cat(sprintf("Values > 1.0: %d/%d (%.1f%%)\n", above_1, n, 100 * above_1 / n))
+  }
+}
     
 
 vlp_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "VLP")
 ns1_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "NS1")
 DIII_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "DIII")
-
 
 
 # save VLP 
@@ -243,3 +296,22 @@ ggsave("Results/DIII_ratio_plot.png",
 DIII_ratio_plot, width = 12, height = 8)
 
 
+
+
+# This function computes summary statistics for ZIKV cross-reactivity ratios
+# across all DENV-infected samples (DENV1-4).
+# For each DENV-infected group, we calculate the ratio:
+#   ZIKV antigen signal / infecting DENV antigen signal
+# This tells us how strongly DENV-infected patients' antibodies
+# cross-react with ZIKV antigen, relative to their own infecting virus.
+# All ratios from DENV1, DENV2, DENV3, and DENV4 infected groups are
+# pooled together, since there is only one ZIKV-infected sample —
+# not enough to compute meaningful within-group statistics.
+# Output: mean, IQR, min/max, and proportion of ratios above/below 1
+#   ratio < 1 → weaker reaction to ZIKV than to infecting DENV serotype
+#   ratio = 1 → equal cross-reactivity
+#   ratio > 1 → stronger reaction to ZIKV than to infecting DENV serotype
+
+compute_zikv_column_stats(ratio_df, "VLP")
+compute_zikv_column_stats(ratio_df, "NS1")
+compute_zikv_column_stats(ratio_df, "DIII")

@@ -218,6 +218,7 @@ train_multiple_targets <- function(
   ))
 }
 
+
 train_multiple_targets_univariate <- function(
     data_list,  
     variables = NULL,  # Vector of variable names to test one by one
@@ -427,9 +428,14 @@ binomial_modeling_results_dengue_chik <- train_multiple_targets(
   metrics = c("AUROC", "AUPRC", "Brier")
 )
 
+
 # results
 binomial_modeling_results$combined_comparison
 binomial_modeling_results_dengue_chik$combined_comparison
+
+# save 
+saveRDS(binomial_modeling_results, 'Results/binomial_modeling_results.rds')
+saveRDS(binomial_modeling_results_dengue_chik, 'Results/binomial_modeling_results_dengue_chik.rds')
 
 
 # --- Multinomial Results 
@@ -521,6 +527,11 @@ univariate_results_alpha <- train_multiple_targets_univariate(
   metrics    = c("AUROC", "AUPRC", "Brier"),
 )
 
+# save 
+saveRDS(univariate_results_flavi, 'Results/univariate_results_flavi.rds')
+saveRDS(univariate_results_alpha, 'Results/univariate_results_alpha.rds')
+
+
 
 model_colours <- c(
   "GLMnet" = "#012b48",
@@ -569,7 +580,7 @@ univariate_plot_dengue <- ggplot(
   aes(x = Value, y = Variable_clean, color = Model, shape = Model)
 ) +
   geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
-  geom_point(size = 5, alpha = 0.9) +
+  geom_point(size = 7, alpha = 0.9) +
   facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
   scale_x_continuous(limits = c(0, 1)) +
   coord_flip() +
@@ -640,7 +651,7 @@ univariate_plot_alpha <- ggplot(
   aes(x = Value, y = Variable_clean, color = Model, shape = Model)
 ) +
   geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
-  geom_point(size = 5, alpha = 0.9) +
+  geom_point(size = 7, alpha = 0.9) +
   facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
   scale_x_continuous(limits = c(0, 1)) +
   coord_flip() +
