@@ -505,8 +505,7 @@ best_models <- bind_rows(
   arrange(type, target)
 
 print(best_models)
-
-
+saveRDS(best_models, 'Results/multivariate_best_models.rds')
 
 
 # Univariate Analysis - look at each antigen independently 
@@ -532,7 +531,8 @@ univariate_results_alpha <- train_multiple_targets_univariate(
 saveRDS(univariate_results_flavi, 'Results/univariate_results_flavi.rds')
 saveRDS(univariate_results_alpha, 'Results/univariate_results_alpha.rds')
 
-
+univariate_results_flavi <- readRDS('Results/univariate_results_flavi.rds')
+univariate_results_alpha <- readRDS('Results/univariate_results_alpha.rds')
 
 model_colours <- c(
   "GLMnet" = "#012b48",
@@ -580,7 +580,7 @@ univariate_plot_dengue <- ggplot(
   plot_df_dengue,
   aes(x = Value, y = Variable_clean, color = Model, shape = Model)
 ) +
-  geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
+  geom_vline(xintercept = 0.99, linetype = "dashed", colour = "#8f0000") +
   geom_point(size = 7, alpha = 0.9) +
   facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
   scale_x_continuous(limits = c(0, 1)) +
