@@ -1,5 +1,5 @@
 ratio_df <- readRDS('Results/ratio_df.rds')
-
+ratio_df
 
 
 pcr_target <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
