@@ -122,7 +122,8 @@ cebu_pivot <- cebu_mutiple_antigens %>%
     values_from = RAU
   )
 
-
+View(cebu_pivot)
+View(cebu_pivot[cebu_pivot$id_patient == "CPC-C-0740-00", ])
 
 # --- Add col: days_since_infection 
 cebu_pivot_days_since_inf  <- cebu_pivot %>%
