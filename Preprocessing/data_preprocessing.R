@@ -44,8 +44,6 @@ log_transform <- function (titre) {
 }
 
 
-
-
 # --- post/pre dataset + cross-sectional dataset
 prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pre_threshold = -1) {
   
@@ -115,6 +113,7 @@ cebu_mutiple_antigens <- read_excel("/Users/ap2488/Desktop/supervised_learning_f
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
 
+
 # pivot to get RAU as main data
 cebu_pivot <- cebu_mutiple_antigens %>%
   pivot_wider(
@@ -123,7 +122,7 @@ cebu_pivot <- cebu_mutiple_antigens %>%
   )
 
 View(cebu_pivot)
-View(cebu_pivot[cebu_pivot$id_patient == "CPC-C-0740-00", ])
+
 
 # --- Add col: days_since_infection 
 cebu_pivot_days_since_inf  <- cebu_pivot %>%
@@ -138,8 +137,6 @@ cebu_pivot_days_since_inf  <- cebu_pivot %>%
     days_since_infection = as.numeric(difftime(date_sample, infection_date, units = "days"))
   ) %>%
   ungroup()
-
-View(cebu_pivot_days_since_inf)
 
 
 # --- Use HI threshold (1.6) to remove subclinical infection 
@@ -232,7 +229,8 @@ antigen_cols <- c(
   "ZIKV_NS1","ZIKV_VLP","ZIKVAS_DIII", "ZIKVSU_NS1","SHERPADES_ZIKV_DIII"
 )
 
-isotypes <- c("IgG", "IgA", "IgM") # not using avidity currently 
+isotypes <- c("IgG", "IgA", "IgM", "avidity") # not using avidity currently 
+
 
 
 # rename + IgG, IgA and IgM isotypes
