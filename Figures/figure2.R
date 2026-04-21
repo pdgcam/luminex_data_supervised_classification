@@ -4,7 +4,7 @@ library(grid)
 # import ratio df 
 logged_preprocessed_cebu_data <- read.csv('Results/logged_preprocessed_cebu_data.csv')
 
-colnames(logged_preprocessed_cebu_data)
+standardised_preprocessed_cebu_data <- read.csv('Results/standardised_preprocessed_cebu_data.csv')
 
 
 
@@ -43,51 +43,57 @@ prepare_antibody_data <- function(data, isotype, antigens = c(flavivirus_antigen
   
   data %>%
     filter(isotype == !!isotype) %>%
-    dplyr::select(id_patient, id_sample, days_since_infection, PCR,
-                  all_of(antigens)) %>%
+    dplyr::select(id_patient, id_sample, days_since_infection, PCR, all_of(antigens)) %>%
     pivot_longer(
-      cols     = all_of(antigens),
-      names_to = "antigen"
+      cols = all_of(antigens),
+      names_to = "antigen",
+      values_to = "value"
     ) %>%
-    mutate( # extract pathogen
+    mutate(
       pathogen = case_when(
         str_detect(antigen, "^SHERPADES_") ~ str_extract(antigen, "(?<=SHERPADES_)[^_]+"),
-        str_detect(antigen, "^ZIKVSU")     ~ "ZIKV",
-        str_detect(antigen, "^ZIKVAS")     ~ "ZIKV",
-        TRUE                               ~ str_extract(antigen, "^[^_]+")
-      ), # extract antigen type
+        str_detect(antigen, "^ZIKVSU") ~ "ZIKV",
+        str_detect(antigen, "^ZIKVAS") ~ "ZIKV",
+        TRUE ~ str_extract(antigen, "^[^_]+")
+      ),
       antigen_type = case_when(
         str_detect(antigen, "^SHERPADES_") ~ "DIII-SHERPADES",
-        TRUE                               ~ str_extract(antigen, "[^_]+$")
+        TRUE ~ str_extract(antigen, "[^_]+$")
       ),
       virus_family = case_when(
         pathogen %in% c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV") ~ "Flavivirus",
-        pathogen %in% c("CHIKV", "ONNV", "MAYV", "RRV")  ~ "Alphavirus"
+        pathogen %in% c("CHIKV", "ONNV", "MAYV", "RRV") ~ "Alphavirus",
+        TRUE ~ NA_character_
       ),
-      days_since_infection = as.numeric(days_since_infection),
-      x_position = case_when(
-        days_since_infection < 0 ~ -30, # all pre-infection samples will be plotted at -30
-        days_since_infection > 30  ~ 30, # ALL post >30 days → 30
-        TRUE  ~ days_since_infection) # 0 to 30 kept as-is
-    ) %>%                                        
+      days_since_infection = as.numeric(days_since_infection)
+    ) %>%
     group_by(id_patient) %>%
     fill(PCR, .direction = "downup") %>%
     ungroup() %>%
-    mutate(                                     
+    mutate(
+      time_bin = case_when(
+        days_since_infection < 0 ~ "pre",
+        days_since_infection > 30 ~ "post",
+        TRUE ~ as.character(days_since_infection)
+      ),
+      x_position = case_when(
+        days_since_infection < 0 ~ -30,
+        days_since_infection > 30 ~ 30,
+        TRUE ~ days_since_infection
+      ),
       color_group = if_else(pathogen == PCR, PCR, "Other")
     ) %>%
-
-    # If >1 sample maps to the same x_position (e.g. >30 days, or <-30 days),
-    # take the average value across those samples per patient/antigen
-    group_by(id_patient, antigen, x_position) %>%
-    summarise(value = mean(value, na.rm = TRUE),
-           PCR = first(PCR),
-           color_group = first(color_group),
-           antigen_type = first(antigen_type),
-           pathogen = first(pathogen),
-           virus_family = first(virus_family),
-          .groups = "drop") %>%
-    arrange(color_group == "Other", color_group) # ← grey lines drawn first
+    group_by(id_patient, antigen, time_bin, x_position) %>%
+    summarise(
+      value = mean(value, na.rm = TRUE),
+      PCR = first(PCR),
+      color_group = first(color_group),
+      antigen_type = first(antigen_type),
+      pathogen = first(pathogen),
+      virus_family = first(virus_family),
+      .groups = "drop"
+    ) %>%
+    arrange(color_group == "Other", color_group)
 }
 
 # --- single plot for one isotype + virus family 
@@ -117,9 +123,11 @@ plot_antibody_dynamics <- function(data,
 
   # Background: all pathogens in family, in grey
   background_data <- data %>%
-    filter(pathogen %in% all_family) %>%
-    mutate(color_group = "Other") %>%
-    tidyr::crossing(facet_pathogen = confirmed)
+  filter(pathogen %in% all_family) %>%   
+  tidyr::crossing(facet_pathogen = confirmed) %>%
+  filter(pathogen != facet_pathogen) %>% # only keep rows where pathogen is NOT the facet pathogen
+  mutate(color_group = "Other") 
+ 
 
   # Foreground data: only confirmed pathogens
   facet_data <- data %>%
@@ -128,55 +136,63 @@ plot_antibody_dynamics <- function(data,
       facet_pathogen = pathogen
     )
 
-  
-  ggplot(data = facet_data,
-         aes(x = x_position, y = value, group = id_patient)) +
-    
-    # Layer 1: all family pathogens in grey (background)
-    geom_line(data  = background_data,
-              color = "grey90", alpha = 0.7, linewidth = 0.5) +
-    geom_point(data = background_data,
-               color = "grey90", alpha = 0.7, size = 2) +
-    
-    # Layer 2: PCR-confirmed coloured lines on top
-    geom_line(data = ~filter(.x, color_group != "Other"),
-              aes(color = color_group), alpha = 0.8, linewidth = 0.7) +
-    geom_point(data = ~filter(.x, color_group != "Other"),
-               aes(color = color_group), alpha = 0.8, size = 2) +
-    
-    facet_grid(antigen_type ~ facet_pathogen, scales = "free_y", drop = TRUE) +
+  foreground_data <- facet_data %>%
+    filter(color_group != "Other")
 
+  ggplot(facet_data, aes(x = x_position, y = value, group = interaction(id_patient, pathogen, antigen))) +
+    geom_line(
+      data = background_data,
+      color = "grey90",
+      alpha = 0.7,
+      linewidth = 0.5
+    ) +
+    geom_point(
+      data = background_data,
+      color = "grey90",
+      alpha = 0.7,
+      size = 2
+    ) +
+    geom_line(
+      data = foreground_data,
+      aes(color = color_group),
+      alpha = 0.8,
+      linewidth = 0.7
+    ) +
+    geom_point(
+      data = foreground_data,
+      aes(color = color_group),
+      alpha = 0.8,
+      size = 2
+    ) +
+    facet_grid(antigen_type ~ facet_pathogen, scales = "free_y", drop = TRUE) +
     scale_color_manual(values = pcr_colours, name = "PCR Confirmed") +
     scale_x_continuous(
-      breaks = c(-30, -15, 0, 15,  30),
-      labels = c("<-30", -15, 0, 15, ">30")
+      breaks = c(-30, -15, 0, 15, 30),
+      labels = c("Pre", -15, 0, 15, ">30")
     ) +
-    
     labs(
-      x     = "Days since PCR+ve infection",
-      y     = y_label) +
-    
+      x = "Days since PCR+ve infection",
+      y = y_label
+    ) +
     theme_bw() +
     theme(
-      strip.text       = element_text(size = 20),
+      strip.text = element_text(size = 20),
       strip.background = element_rect(fill = "#ffffff"),
-      axis.text        = element_text(size = 20),
-      axis.text.x      = element_text(size = 20),
-      axis.text.y      = element_text(size = 20),
-      axis.title       = element_text(size = 20),
-      legend.position  = "bottom",
-      legend.text      = element_text(size = 20),
-      legend.title     = element_text(size = 20),
+      axis.text = element_text(size = 20),
+      axis.text.x = element_text(size = 20),
+      axis.text.y = element_text(size = 20),
+      axis.title = element_text(size = 20),
+      legend.position = "bottom",
+      legend.text = element_text(size = 20),
+      legend.title = element_text(size = 20),
       legend.direction = "horizontal",
-      legend.margin    = margin(0, 0, 0, 0),
-      panel.spacing.x  = unit(1, "lines"), 
-      panel.spacing.y  = unit(1, "lines"),
+      legend.margin = margin(0, 0, 0, 0),
+      panel.spacing.x = unit(1, "lines"),
+      panel.spacing.y = unit(1, "lines"),
       panel.grid.minor = element_blank(),
-      plot.background  = element_rect(fill = "white", color = "black", linewidth = 0.5)
+      plot.background = element_rect(fill = "white", color = "black", linewidth = 0.5)
     )
-    
 }
-
 
 
 igg_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgG", antigens = c(flavivirus_antigens, alphavirus_antigens))
@@ -184,12 +200,21 @@ igm_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgM", antigens
 iga_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgA", antigens = c(flavivirus_antigens, alphavirus_antigens))
 avidity_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "avidity", antigens = c(flavivirus_antigens, alphavirus_antigens))
 
+igg_data_standardised <- prepare_antibody_data(standardised_preprocessed_cebu_data, "IgG", antigens = c(flavivirus_antigens, alphavirus_antigens))
+
+
+
 # Plot separately
 igg_flavi <- plot_antibody_dynamics(igg_data, "IgG", "Flavivirus")
 igg_alpha <- plot_antibody_dynamics(igg_data, "IgG", "Alphavirus")
 
+igg_flavi_standardised <- plot_antibody_dynamics(igg_data_standardised, "IgG", "Flavivirus")
+igg_alpha_standardised <- plot_antibody_dynamics(igg_data_standardised, "IgG", "Alphavirus")
+
 print(igg_flavi)
 print(igg_alpha)
+print(igg_flavi_standardised)
+print(igg_alpha_standardised)
 
 # save IgG 
 ggsave("Results/flavivirus_IgG_dynamics.png", 
@@ -209,5 +234,3 @@ print(iga_flavi)
 print(igm_flavi)
 print(avidity_flavi)
 
-
-logged_preprocessed_cebu_data$isotype %>% unique()

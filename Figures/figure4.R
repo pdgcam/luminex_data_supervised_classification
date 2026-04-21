@@ -1,4 +1,6 @@
 
+library(caret)
+
 
 # --- Source functions
 source(here('Models/train_binary_models.R'))
@@ -377,13 +379,16 @@ train_multiple_targets_univariate <- function(
 
 # ---- Import prepossessed datasets ---- 
 ratio_df <- readRDS('Results/ratio_df.rds')
+ratio_df_logged <- readRDS('Results/logged_ratio_df.rds')
+
 table(ratio_df$target)
+table(ratio_df_logged$target)
 
 
 # ---- Binary Results 
 # Define targets / classification question
 data_with_binomial_targets <- select_targets(
-  preprocessed_data = ratio_df,
+  preprocessed_data = ratio_df_logged,
   targets = c("flavi", "dengue"),
   drop_original_target = FALSE,
   min_samples = 2
@@ -391,7 +396,7 @@ data_with_binomial_targets <- select_targets(
 
 
 data_with_binomial_targets_chik <- select_targets(
-  preprocessed_data = ratio_df,
+  preprocessed_data = ratio_df_logged,
   targets = c("chik", "dengue_chik"),
   drop_original_target = FALSE,
   min_samples = 2
@@ -416,15 +421,13 @@ table((data_with_binomial_targets_chik$chik$chik))
 binomial_modeling_results <- train_multiple_targets(
   data_list = data_with_binomial_targets,
   variables = NULL,  # Uses all columns except target
-  k_fold = 5,
   metrics = c("AUROC", "AUPRC", "Brier"))
-
+binomial_modeling_results
 
 # Fit binomial model - for dengue vs chik 
 binomial_modeling_results_dengue_chik <- train_multiple_targets(
   data_list = data_with_binomial_targets_chik,
   variables = NULL,  # Uses all columns except target
-  k_fold = 5,
   metrics = c("AUROC", "AUPRC", "Brier")
 )
 
