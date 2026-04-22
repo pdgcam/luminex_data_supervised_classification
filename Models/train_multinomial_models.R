@@ -3,8 +3,7 @@ train_multinomial_models <- function(
     data,
     target,
     variables = NULL,
-    k_fold = "LOOCV", 
-    metrics = c("AUROC", "AUPRC", "Brier", "StratBrier")) {
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
   
   # ---- Input Validation ----
   if (!target %in% names(data)) {
@@ -20,16 +19,13 @@ train_multinomial_models <- function(
     }
   }
   
-  valid_metrics <- c("AUROC", "AUPRC", "Brier", "StratBrier", "logLoss")
+  valid_metrics <- c("ROC", "AUPRC", "Brier", "StratBrier", "logLoss")
   invalid_metrics <- setdiff(metrics, valid_metrics)
   if (length(invalid_metrics) > 0) {
     stop(paste("Invalid metrics:", paste(invalid_metrics, collapse = ", "),
                "\nValid options:", paste(valid_metrics, collapse = ", ")))
   }
   
-  if (!k_fold %in% c(5, 10, "LOOCV")) {
-    warning("k_fold should be 5, 10 or LOOCV. Using provided value.")
-  }
   
   # ---- Prepare Data ----
   model_data <- data[, c(variables, target)]
@@ -107,11 +103,11 @@ train_multinomial_models <- function(
       }
       
       # AUC (pROC with explicit direction to avoid flipping)
-     auc_per_class[k] <- tryCatch({
+    auc_per_class[k] <- tryCatch({
     roc_obj <- pROC::roc(
       response  = y_binary,
       predictor = p_class,
-      levels    = c(0, 1),   # 0 = negative, 1 = positive
+      levels    = c(0, 1),    # 0 = negative, 1 = positive
       direction = "<",        # predictor increases with positive class
       quiet     = TRUE
     )
@@ -124,10 +120,11 @@ train_multinomial_models <- function(
       }, error = function(e) NA_real_)
     }
     
+    # Macro AUC - average of per-class AUCs (
     auc_macro   <- mean(auc_per_class,   na.rm = TRUE)
     auprc_macro <- mean(auprc_per_class, na.rm = TRUE)
     
-    # Micro AUC (all OvR comparisons pooled)
+    # Micro AUC - computed on pooled binary labels and probabilities (across all samples and classes)
     auc_micro <- tryCatch({
       if (length(unique(all_y_binary)) >= 2) {
         as.numeric(pROC::auc(
@@ -185,8 +182,7 @@ train_multinomial_models <- function(
   }
   
   # ---- Create trainControl ----
-  if (k_fold == "LOOCV") {
-    multi_control <- caret::trainControl(
+  multi_control <- caret::trainControl(
       method          = "LOOCV",
       summaryFunction = calculate_multiclass_metrics,
       classProbs      = TRUE,
@@ -194,21 +190,7 @@ train_multinomial_models <- function(
       savePredictions = "all",
       allowParallel   = FALSE
     )
-    cv_folds <- NULL
-  } else {
-    cv_folds <- caret::createFolds(model_data[[target]], k = k_fold)
-    train_indices <- lapply(cv_folds, function(test_idx) {
-      setdiff(seq_len(nrow(model_data)), test_idx)
-    })
-    multi_control <- caret::trainControl(
-      method          = "cv",
-      summaryFunction = calculate_multiclass_metrics,
-      classProbs      = TRUE,
-      verboseIter     = FALSE,
-      savePredictions = "all",
-      index           = train_indices
-    )
-  }
+
   
   # ---- Train Models ----
   cat("Training Random Forest (multiclass)\n")
@@ -242,26 +224,28 @@ train_multinomial_models <- function(
   })
   
   # ---- Extract Predictions ----
+  filter_to_best <- function(preds, best_tune) {
+    mask <- rep(TRUE, nrow(preds))
+    for (param in names(best_tune)) {
+      if (param %in% names(preds)) {
+        mask <- mask & (preds[[param]] == best_tune[[param]])
+      }
+    }
+    preds[mask, ]
+  }
+
   all_predictions <- list()
-  
+
   if (!is.null(rf_model)) {
-    all_predictions$rf <- rf_model$pred %>%
+    all_predictions$rf <- filter_to_best(rf_model$pred, rf_model$bestTune) %>%
       dplyr::mutate(Model = "Random Forest")
   }
-  
+
   if (!is.null(nb_model)) {
-    all_predictions$nb <- nb_model$pred %>%
+    all_predictions$nb <- filter_to_best(nb_model$pred, nb_model$bestTune) %>%
       dplyr::mutate(Model = "NaiveBayes")
   }
-  
-  # Ensure each predictions df has all class probability columns
-  ensure_prob_cols <- function(df, classes) {
-    missing <- setdiff(classes, names(df))
-    for (cl in missing) df[[cl]] <- NA_real_
-    df[, c(setdiff(names(df), classes), classes)]
-  }
-  all_predictions <- lapply(all_predictions, ensure_prob_cols, classes = class_levels)
-  
+
   # Combine predictions
   combined_preds <- dplyr::bind_rows(all_predictions) %>%
     dplyr::select(Model, rowIndex, obs, pred, dplyr::all_of(class_levels)) %>%
@@ -299,10 +283,8 @@ train_multinomial_models <- function(
     predictions    = combined_preds,
     oof_metrics    = oof_metrics,
     comparison     = oof_metrics,
-    cv_folds       = cv_folds,
     variables_used = variables,
     target_used    = target,
-    k_fold         = k_fold,
     metrics        = metrics
   ))
 }

@@ -1,17 +1,15 @@
 
-
 train_binary_models <- function(
     data,
     target,
     variables = NULL,
-    metrics = c("AUROC", "AUPRC", "Brier"),
+    metrics = c("ROC", "AUPRC", "Brier"),
     univariate = FALSE) {
   
   # ---- Input Validation ----
   if (!target %in% names(data)) {
     stop(paste("Target column", target, "not found in data"))
   }
-  
 
   if (is.null(variables)) {
     variables <- setdiff(names(data), target)
@@ -27,7 +25,7 @@ train_binary_models <- function(
   n_predictors <- ncol(model_data) - 1
   
   
-  valid_metrics <- c("AUROC", "AUPRC", "Brier", "StratBrier")
+  valid_metrics <- c("ROC", "AUPRC", "Brier", "StratBrier")
   invalid_metrics <- setdiff(metrics, valid_metrics)
   if (length(invalid_metrics) > 0) {
     stop(paste("Invalid metrics:", paste(invalid_metrics, collapse = ", "),
@@ -45,7 +43,7 @@ train_binary_models <- function(
                paste(levels(model_data[[target]]), collapse = ", ")))
   }
 
-  # expects positive class to be first level 
+  # caret expects positive class to be first level 
   model_data[[target]] <- relevel(model_data[[target]], ref = "positive")
   target_levels <- levels(model_data[[target]])  
   cat(sprintf("Binary classification: %s (class 1) vs %s (class 2)\n",
@@ -53,10 +51,11 @@ train_binary_models <- function(
 
   
   # ---- Set Up Train Control ----
-  combinedSummary <- function(data, lev = NULL, model = NULL) {
+  combinedBinary <- function(data, lev = NULL, model = NULL) {
     stopifnot(length(lev) == 2)
     
-    # AUROC, Sens, Spec from twoClassSummary
+    # ROC, Sensitivity, Specificity from twoClassSummary
+    # this is for AUPRC and Brier
     base <- caret::twoClassSummary(data, lev = lev, model = model)
     
     # lev[1] == positive class
@@ -79,12 +78,14 @@ train_binary_models <- function(
   
   binary_control <- caret::trainControl(
     method  = "LOOCV", 
-    summaryFunction = combinedSummary,
+    summaryFunction = combinedBinary,
     classProbs = TRUE,
     verboseIter = FALSE,
     savePredictions = "all")
 
-  # ---- Helper: pooled AUC from held-out predictions ----
+  # ---- pooled AUC from held-out predictions ---- 
+  # pooled == single AUC computed on all held-out predictions concatenated across folds
+  # more stable than averaging AUCs from each fold (which can be noisy with small test sets)
   get_pooled_auc <- function(model, model_data, target) {
     pos_name    <- levels(model_data[[target]])[1]  # "positive"
     preds       <- model$pred
@@ -140,7 +141,7 @@ train_binary_models <- function(
   # mtry cant be > predictors 
   n_features <- length(variables)
   mtry_values <- unique(pmax(1, floor(c(
-    sqrt(n_features),           
+    sqrt(n_features),
     n_features / 3,
     n_features / 2,
     n_features
@@ -186,28 +187,34 @@ train_binary_models <- function(
 
   # ---- Compute Pooled AUCs ----
   pooled_aucs <- list()
-  pooled_aucs$glmnet <- get_pooled_auc(glm_model, model_data, target)
+  
+  #GLM AUC
+    if (univariate || n_predictors == 1) {
+    pooled_aucs$glm <- get_pooled_auc(glm_model, model_data, target)
+  } else {
+    pooled_aucs$glmnet <- get_pooled_auc(glm_model, model_data, target)
+  }
+  # RF or Tree AUC
   if (univariate || n_predictors == 1) {
     pooled_aucs$tree <- get_pooled_auc(tree_model, model_data, target)
   } else {
     pooled_aucs$rf <- get_pooled_auc(rf_model, model_data, target)
   }
+  # SVM AUC
   pooled_aucs$svm <- get_pooled_auc(svm_model, model_data, target)
 
   # ---- Extract Predictions ----
-  glm_preds <- glm_model$pred %>%
-  mutate(Model = if (univariate || n_predictors == 1) "GLM" else "GLMnet")
 
+  # ---- Build Model List + Names ----
   if (univariate || n_predictors == 1) {
-    tree_preds <- tree_model$pred %>%
-      mutate(Model = "Decision Tree")
+    model_list    <- list(glm = glm_model, tree = tree_model, svm = svm_model)
+    model_names   <- c("glm", "tree", "svm")
+    display_names <- c("GLM", "Decision Tree", "SVM")
   } else {
-    tree_preds <- rf_model$pred %>%
-      mutate(Model = "Random Forest")
+    model_list    <- list(glmnet = glm_model, rf = rf_model, svm = svm_model)
+    model_names   <- c("glmnet", "rf", "svm")
+    display_names <- c("GLMnet", "Random Forest", "SVM")
   }
-
-  svm_preds <- svm_model$pred %>%
-    mutate(Model = "SVM")
 
 
   filter_to_best <- function(preds, best_tune) {
@@ -220,10 +227,11 @@ train_binary_models <- function(
   preds[mask, ]
 }
 
-  all_predictions <- bind_rows(
-  filter_to_best(glm_preds,  glm_model$bestTune),
-  filter_to_best(tree_preds, if (univariate || n_predictors == 1) tree_model$bestTune else rf_model$bestTune),
-  filter_to_best(svm_preds,  svm_model$bestTune)
+all_predictions <- bind_rows(
+  mapply(function(name, model) {
+    filter_to_best(model$pred, model$bestTune) %>%
+      mutate(Model = display_names[match(name, model_names)])
+  }, model_names, model_list, SIMPLIFY = FALSE)
 )
 
   # Rename columns
@@ -242,31 +250,16 @@ train_binary_models <- function(
     dplyr::select(Model, rowIndex, obs_class, pred_class, all_of(prob_cols))
 
   
-  # ---- Build Model List ----
-  model_list <- list(glmnet = glm_model, svm = svm_model)
-
-  if (univariate || n_predictors == 1) {
-    model_list$tree  <- tree_model
-    display_names    <- c(if (univariate || n_predictors == 1) "GLM" else "GLMnet",
-                          "Decision Tree", "SVM")
-    model_names      <- c("glmnet", "tree", "svm")
-  } else {
-    model_list$rf    <- rf_model
-    display_names    <- c("GLMnet", "Random Forest", "SVM")
-    model_names      <- c("glmnet", "rf", "svm")
-  }
-
   # ---- Compile Metrics using Pooled AUC ----
-  # pooled_aucs already computed by get_pooled_auc() earlier in the function
   comparison_df <- data.frame(
     Model     = display_names,
-    AUROC     = sapply(model_names, function(m) pooled_aucs[[m]]$auc),
-    AUROC_low = sapply(model_names, function(m) pooled_aucs[[m]]$ci_low),
-    AUROC_high= sapply(model_names, function(m) pooled_aucs[[m]]$ci_high)
+    ROC       = sapply(model_names, function(m) pooled_aucs[[m]]$auc),
+    ROC_low   = sapply(model_names, function(m) pooled_aucs[[m]]$ci_low),
+    ROC_high  = sapply(model_names, function(m) pooled_aucs[[m]]$ci_high)
   )
   
   # Calculate other metrics from model results
-  for (metric in setdiff(metrics, "AUROC")) {
+  for (metric in setdiff(metrics, "ROC")) {
     comparison_df[[metric]] <- sapply(model_names, function(model) {
       model_obj <- model_list[[model]]
       if (length(model_obj$bestTune) == 0 || all(is.na(model_obj$bestTune))) {
@@ -292,9 +285,7 @@ train_binary_models <- function(
     target_used    = target,
     target_levels  = target_levels, 
     method         = "LOOCV",
-    metrics        = metrics,
-    model_type = if(univariate || n_predictors == 1) "tree" else "rf"
-  ))
+    metrics        = metrics))
 }
 
 
@@ -304,7 +295,7 @@ train_binary_models <- function(
 train_multiple_targets <- function(
     data_list,  
     variables = NULL,
-    metrics = c("AUROC", "AUPRC", "Brier", "StratBrier")) {
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
   
   # Store all results
   all_results <- list()
@@ -329,9 +320,6 @@ train_multiple_targets <- function(
     n_classes <- length(target_values)
     print(n_classes)
 
-
-
-    
     if (n_classes == 2) {
       # Train models for this target
       result <- train_binary_models(
