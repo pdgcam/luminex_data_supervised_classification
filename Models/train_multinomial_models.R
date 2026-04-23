@@ -9,9 +9,11 @@ train_multinomial_models <- function(
   if (!target %in% names(data)) {
     stop(paste("Target column", target, "not found in data"))
   }
+
+
   
   if (is.null(variables)) {
-    variables <- setdiff(names(data), target)
+    variables <- setdiff(names(data), c(target, "id_patient"))
   } else {
     missing_vars <- setdiff(variables, names(data))
     if (length(missing_vars) > 0) {
@@ -271,7 +273,18 @@ train_multinomial_models <- function(
     dplyr::group_by(Model) %>%
     dplyr::group_modify(~ compute_metrics_wrapper(.x)) %>%
     dplyr::ungroup()
-  
+
+  coverage <- combined_preds %>%
+    dplyr::group_by(Model) %>%
+    dplyr::summarise(
+      n_predictions = dplyr::n(),
+      coverage = dplyr::n() / nrow(model_data),
+      .groups = "drop"
+    )
+
+  oof_metrics <- oof_metrics %>%
+    dplyr::left_join(coverage, by = "Model")
+    
   # ---- Compile and Return ----
   trained_models <- Filter(Negate(is.null), list(
     rf = rf_model,
@@ -285,6 +298,9 @@ train_multinomial_models <- function(
     comparison     = oof_metrics,
     variables_used = variables,
     target_used    = target,
-    metrics        = metrics
+    metrics        = metrics,
+    nb_failed_folds = if (!is.null(nb_model)) {    # <-- add this
+    nrow(data) - length(unique(nb_model$pred$rowIndex))
+  } else NA_integer_
   ))
 }

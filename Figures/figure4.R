@@ -109,12 +109,13 @@ select_targets <- function(preprocessed_data,
   return(data_with_target)
 }
 
+
 # Function to run binomial and multinomial classification with multiple targets simulatensouly 
 train_multiple_targets <- function(
     data_list,  
     variables = NULL,
-    k_fold = 5,
-    metrics = c("AUROC", "AUPRC", "Brier", "StratBrier")) {
+    positive_class_map = list(),
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
   
   # Store all results
   all_results <- list()
@@ -138,14 +139,14 @@ train_multiple_targets <- function(
     target_values <- unique(current_data[[target_col]])
     n_classes <- length(target_values)
     print(n_classes)
-    
+
     if (n_classes == 2) {
       # Train models for this target
       result <- train_binary_models(
         data = current_data,
         target = target_col,
         variables = variables,
-        k_fold = k_fold,
+        positive_class = pos_class,
         metrics = metrics
       )
       
@@ -169,7 +170,6 @@ train_multiple_targets <- function(
         data = current_data,
         target = target_col,
         variables = variables,
-        k_fold = "LOOCV", 
         metrics = metrics
       )
       
@@ -214,20 +214,18 @@ train_multiple_targets <- function(
     summary = list(
       n_targets = length(all_results),
       target_names = names(all_results),
-      k_fold = k_fold,
       metrics = metrics
     )
   ))
 }
 
 
+
 train_multiple_targets_univariate <- function(
     data_list,  
-    variables = NULL,  # Vector of variable names to test one by one
-    k_fold = 5,
-    metrics = c("AUROC", "AUPRC", "Brier", "StratBrier"),
-    univariate = TRUE) {
-  
+    variables = NULL,
+    positive_class_map = list(),
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
   
   # Store all results
   all_results <- list()
@@ -250,19 +248,17 @@ train_multiple_targets_univariate <- function(
     # Determine class type based on target variable
     target_values <- unique(current_data[[target_col]])
     n_classes <- length(target_values)
-    cat("Number of classes:", n_classes, "\n")
-    
-    current_data[[target_col]] <-  factor(current_data[[target_col]])
-    
-    # If variables not specified, use all columns except target
-      if (is.null(variables)) {
-      variables <- setdiff(names(current_data), target_col)
-    }
+    print(n_classes)
     
     # Check for only one class
     if (n_classes < 2) {
       warning(paste("Target", target_col, "has only 1 class. Skipping."))
       next
+    }
+    
+    # If variables not specified, use all columns except target
+    if (is.null(variables)) {
+      variables <- setdiff(names(current_data), target_col)
     }
     
     # Initialize storage for this target
@@ -283,48 +279,46 @@ train_multiple_targets_univariate <- function(
         next
       }
       
-      # Create a unique identifier for this variable-target combination
-      result_name <- paste0(target_name, "_", var)
-      
       tryCatch({
-        # Train model with ONLY this variable
         if (n_classes == 2) {
-          cat("  -> Calling train_binary_models\n")
+          # Look up positive class for this target, fall back to NULL if not specified
+          pos_class <- if (!is.null(positive_class_map[[target_name]])) positive_class_map[[target_name]] else NULL
+          
           result <- train_binary_models(
             data = current_data,
             target = target_col,
-            variables = var,  
-            k_fold = k_fold,
+            variables = var,
+            positive_class = pos_class,
             metrics = metrics
           )
         } else if (n_classes > 2) {
           result <- train_multinomial_models(
             data = current_data,
             target = target_col,
-            variables = var, 
-            n_repeats = 5
+            variables = var,
+            metrics = metrics
           )
         }
-       
-         # Store results with variable name
+        
+        # Store results with variable name
         target_results[[var]] <- result
         
         # Add metadata to comparison dataframe
         comparison_with_meta <- result$comparison
-        comparison_with_meta$Target <- target_name
-        comparison_with_meta$Variable <- var
+        comparison_with_meta$target <- target_name
+        comparison_with_meta$variable <- var
         target_comparisons[[var]] <- comparison_with_meta
         
         # Add metadata to predictions dataframe
         predictions_with_meta <- result$predictions
-        predictions_with_meta$Target <- target_name
-        predictions_with_meta$Variable <- var
+        predictions_with_meta$target <- target_name
+        predictions_with_meta$variable <- var
         target_predictions[[var]] <- predictions_with_meta
         
-        cat(sprintf("Completed"))
+        cat(sprintf("Completed\n"))
         
       }, error = function(e) {
-        cat("  -> ERROR:", e$message, "\n") 
+        cat("  -> ERROR:", e$message, "\n")
         warning(paste("Error processing variable", var, "for target", target_name, ":", e$message))
       })
     }
@@ -332,7 +326,6 @@ train_multiple_targets_univariate <- function(
     # Store results for this target
     all_results[[target_name]] <- target_results
     
-    # Combine comparisons and predictions for this target
     if (length(target_comparisons) > 0) {
       all_comparisons[[target_name]] <- dplyr::bind_rows(target_comparisons)
     }
@@ -341,25 +334,17 @@ train_multiple_targets_univariate <- function(
     }
   }
   
-  # Combine all comparison dataframes across targets
-  combined_comparison <- NULL
-  if (length(all_comparisons) > 0) {
-    combined_comparison <- dplyr::bind_rows(all_comparisons)
-    rownames(combined_comparison) <- NULL
-    # Reorder columns to put Target and Variable first
-    col_order <- c("Target", "Variable", setdiff(names(combined_comparison), c("Target", "Variable")))
-    combined_comparison <- combined_comparison[, col_order]
-  }
+  # Combine all comparison dataframes
+  combined_comparison <- dplyr::bind_rows(all_comparisons)
+  rownames(combined_comparison) <- NULL
+  col_order <- c("target", "variable", setdiff(names(combined_comparison), c("target", "variable")))
+  combined_comparison <- combined_comparison[, col_order]
   
-  # Combine all predictions dataframes across targets
-  combined_predictions <- NULL
-  if (length(all_predictions) > 0) {
-    combined_predictions <- dplyr::bind_rows(all_predictions)
-    rownames(combined_predictions) <- NULL
-    # Reorder columns to put Target and Variable first
-    pred_col_order <- c("Target", "Variable", setdiff(names(combined_predictions), c("Target", "Variable")))
-    combined_predictions <- combined_predictions[, pred_col_order]
-  }
+  # Combine all predictions dataframes
+  combined_predictions <- dplyr::bind_rows(all_predictions)
+  rownames(combined_predictions) <- NULL
+  pred_col_order <- c("target", "variable", setdiff(names(combined_predictions), c("target", "variable")))
+  combined_predictions <- combined_predictions[, pred_col_order]
   
   return(list(
     results_by_target = all_results,
@@ -370,11 +355,19 @@ train_multiple_targets_univariate <- function(
       target_names = names(all_results),
       n_variables_tested = length(variables),
       variables_tested = variables,
-      k_fold = k_fold,
       metrics = metrics
     )
   ))
 }
+
+positive_class_map <- list(
+  flavi       = "positive",
+  dengue      = "positive",
+  zika        = "positive",
+  chik        = "positive",
+  dengue_zika = "dengue",
+  dengue_chik = "dengue"
+)
 
 
 # ---- Import prepossessed datasets ---- 
@@ -390,7 +383,7 @@ table(ratio_df_logged$target)
 data_with_binomial_targets <- select_targets(
   preprocessed_data = ratio_df_logged,
   targets = c("flavi", "dengue"),
-  drop_original_target = FALSE,
+  drop_original_target = TRUE,
   min_samples = 2
 )
 
@@ -398,7 +391,7 @@ data_with_binomial_targets <- select_targets(
 data_with_binomial_targets_chik <- select_targets(
   preprocessed_data = ratio_df_logged,
   targets = c("chik", "dengue_chik"),
-  drop_original_target = FALSE,
+  drop_original_target = TRUE,
   min_samples = 2
 )
 
@@ -417,20 +410,25 @@ table((data_with_binomial_targets_chik$dengue_chik$dengue_chik))
 table((data_with_binomial_targets_chik$chik$chik))
 
 
+
 # Fit binomial models
 binomial_modeling_results <- train_multiple_targets(
   data_list = data_with_binomial_targets,
+  positive_class_map = positive_class_map,
   variables = NULL,  # Uses all columns except target
-  metrics = c("AUROC", "AUPRC", "Brier"))
-binomial_modeling_results
+  metrics = c("ROC", "AUPRC", "Brier"))
+
 
 # Fit binomial model - for dengue vs chik 
 binomial_modeling_results_dengue_chik <- train_multiple_targets(
   data_list = data_with_binomial_targets_chik,
   variables = NULL,  # Uses all columns except target
-  metrics = c("AUROC", "AUPRC", "Brier")
+  metrics = c("ROC", "AUPRC", "Brier"),
+  positive_class_map = list(
+    chik = "positive",
+    dengue_chik = "dengue"
+  )
 )
-
 
 # results
 binomial_modeling_results$combined_comparison
@@ -443,12 +441,14 @@ saveRDS(binomial_modeling_results_dengue_chik, 'Results/binomial_modeling_result
 
 # --- Multinomial Results 
 data_with_multinomial_targets <- select_targets(
-  preprocessed_data = ratio_df,
+  preprocessed_data = ratio_df_logged,
   targets = c("dengue_serotype", "dengue_serotype_neg"),
   drop_original_target = TRUE, 
   min_samples = 2
 )
 
+table(ratio_df_logged$target)
+nrow(ratio_df_logged)
 sum(is.na(data_with_multinomial_targets$dengue_serotype$dengue_serotype))
 sum(is.na(data_with_multinomial_targets$dengue_serotype_neg$dengue_serotype_neg))
 
@@ -467,9 +467,10 @@ table(data_with_multinomial_targets$dengue_serotype_neg$dengue_serotype_neg)
 dengue_serotype_results <- train_multiple_targets(
   data = data_with_multinomial_targets,
   variables = NULL,
-  k_fold = "LOOCV", 
-  metrics = c("AUROC", "AUPRC", "Brier", "StratBrier"))
+  metrics = c("ROC", "AUPRC", "Brier", "StratBrier"))
 
+
+saveRDS(dengue_serotype_results, 'Results/dengue_serotype_results.rds')
 
 # Micro-average "takes imbalance into account" in the sense that the resulting performance is based on the proportion of every class
 # i.e.the performance of a large class has more impact on the result than of a small class.
@@ -519,15 +520,15 @@ serotype_variables_alpha <- grep("CHIKV|ONNV|MAYV", names(ratio_df), value = TRU
 univariate_results_flavi <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets,
   variables  = serotype_variables_flavi,
-  k_fold     = 5,
-  metrics    = c("AUROC", "AUPRC", "Brier"),
+  metrics    = c("ROC", "AUPRC", "Brier"),
 )
+
+unique(univariate_results_flavi$combined_comparison$target)
 
 univariate_results_alpha <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets_chik,
   variables  = serotype_variables_alpha,
-  k_fold     = 5,
-  metrics    = c("AUROC", "AUPRC", "Brier"),
+  metrics    = c("ROC", "AUPRC", "Brier"),
 )
 
 # save 
@@ -544,44 +545,44 @@ model_colours <- c(
 )
 
 plot_df_dengue <- univariate_results_flavi$combined_comparison %>%
-  filter(Target == "dengue") %>%
-  dplyr::select(Target, Variable, Model, AUROC) %>%
-  pivot_longer(cols = AUROC, names_to = "Metric", values_to = "Value") %>%
-  group_by(Variable) %>%
+  filter(target == "dengue") %>%
+  dplyr::select(target, variable, Model, ROC) %>%
+  pivot_longer(cols = ROC, names_to = "Metric", values_to = "Value") %>%
+  group_by(variable) %>%
   mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
   ungroup()
 
 var_order_dengue <- plot_df_dengue %>%
-  distinct(Variable, mean_auc) %>%
+  distinct(variable, mean_auc) %>%
   arrange(desc(mean_auc)) %>%
   mutate(
-    Variable_clean = Variable %>%
+    variable_clean = variable %>%
       str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
       str_replace("SHERPADES_", "SHERPADES ") %>%
       str_replace_all("_", " ") %>%
       str_wrap(width = 14)
   ) %>%
   mutate(
-    Variable_clean = factor(Variable_clean, levels = Variable_clean)
+    variable_clean = factor(variable_clean, levels = variable_clean)
   )
 
 # Join labels back and explicitly set factor order
 plot_df_dengue <- plot_df_dengue %>%
   left_join(
-    var_order_dengue %>% dplyr::select(Variable, Variable_clean),
-    by = "Variable"
+    var_order_dengue %>% dplyr::select(variable, variable_clean),
+    by = "variable"
   ) %>%
   mutate(
-    Variable_clean = factor(
-      Variable_clean,
-      levels = var_order_dengue$Variable_clean
+    variable_clean = factor(
+      variable_clean,
+      levels = var_order_dengue$variable_clean
     )
   )
 
 
 univariate_plot_dengue <- ggplot(
   plot_df_dengue,
-  aes(x = Value, y = Variable_clean, color = Model, shape = Model)
+  aes(x = Value, y = variable_clean, color = Model, shape = Model)
 ) +
   geom_vline(xintercept = 0.99, linetype = "dashed", colour = "#8f0000") +
   geom_point(size = 7, alpha = 0.9) +
@@ -605,7 +606,9 @@ univariate_plot_dengue <- ggplot(
     strip.text = element_blank(),
     legend.position = "bottom",
     plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
-  ) 
+  )
+
+print(univariate_plot_dengue) 
 
 ggsave("Results/univariate_plot_dengue.png",
        univariate_plot_dengue, width = 20, height = 10, dpi = 300)
@@ -615,10 +618,10 @@ ggsave("Results/univariate_plot_dengue.png",
 
 # CHIK Univariate results 
 plot_df_alpha <- univariate_results_alpha$combined_comparison %>%
-  filter(Target == "chik") %>%
-  dplyr::select(Target, Variable, Model, AUROC) %>%
-  pivot_longer(cols = AUROC, names_to = "Metric", values_to = "Value") %>%
-  group_by(Variable) %>%
+  filter(target == "chik") %>%
+  dplyr::select(target, variable, Model, ROC) %>%
+  pivot_longer(cols = ROC, names_to = "Metric", values_to = "Value") %>%
+  group_by(variable) %>%
   mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
   ungroup()
 

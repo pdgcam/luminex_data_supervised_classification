@@ -274,10 +274,10 @@ compute_zikv_column_stats <- function(data, antigen_suffix, flavi_targets = pcr_
   }
 }
 
-vlp_ratio_plot <- plot_ratio_grid(ratio_df_logged, antigen_suffix = "VLP")
-ns1_ratio_plot <- plot_ratio_grid(ratio_df_logged, antigen_suffix = "NS1")
-DIII_ratio_plot <- plot_ratio_grid(ratio_df_logged, antigen_suffix = "DIII")
-sherpades_DIII_ratio_plot <- plot_ratio_grid(ratio_df_logged, antigen_suffix = "SHERPADES")
+vlp_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "VLP")
+ns1_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "NS1")
+DIII_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "DIII")
+sherpades_DIII_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "SHERPADES")
 
 vlp_ratio_plot
 ns1_ratio_plot

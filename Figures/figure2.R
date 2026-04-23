@@ -6,7 +6,7 @@ logged_preprocessed_cebu_data <- read.csv('Results/logged_preprocessed_cebu_data
 
 standardised_preprocessed_cebu_data <- read.csv('Results/standardised_preprocessed_cebu_data.csv')
 
-
+colnames(logged_preprocessed_cebu_data)
 
 # Define antigen groups
 flavivirus_antigens <- c(

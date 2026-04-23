@@ -3,6 +3,7 @@ train_binary_models <- function(
     data,
     target,
     variables = NULL,
+    positive_class = NULL,
     metrics = c("ROC", "AUPRC", "Brier"),
     univariate = FALSE) {
   
@@ -12,7 +13,7 @@ train_binary_models <- function(
   }
 
   if (is.null(variables)) {
-    variables <- setdiff(names(data), target)
+    variables <- setdiff(names(data), c(target, "id_patient"))
   } else {
     missing_vars <- setdiff(variables, names(data))
     if (length(missing_vars) > 0) {
@@ -23,6 +24,10 @@ train_binary_models <- function(
   # --- get data to input to model ----
   model_data <- data[, c(variables, target)]
   n_predictors <- ncol(model_data) - 1
+
+  if ("id_patient" %in% names(data)) {
+    rownames(model_data) <- data[["id_patient"]]
+    }
   
   
   valid_metrics <- c("ROC", "AUPRC", "Brier", "StratBrier")
@@ -38,13 +43,22 @@ train_binary_models <- function(
     model_data[[target]] <- factor(model_data[[target]])
   }
 
-  if (!"positive" %in% levels(model_data[[target]])) {
-    stop(paste("'positive' level not found in target — levels are:",
-               paste(levels(model_data[[target]]), collapse = ", ")))
+  # If positive_class is not specified, use the first level of the factor as the positive class
+  if (is.null(positive_class)) {
+    positive_class <- levels(model_data[[target]])[1]
+    message(sprintf("No positive_class specified — using '%s' as positive class", positive_class))
   }
 
+  # if positive class not in target levels, throw error
+  if (!positive_class %in% levels(model_data[[target]])) {
+  stop(sprintf("positive_class '%s' not found in target levels: %s",
+               positive_class, paste(levels(model_data[[target]]), collapse = ", ")))
+  }
+
+
   # caret expects positive class to be first level 
-  model_data[[target]] <- relevel(model_data[[target]], ref = "positive")
+  model_data[[target]] <- relevel(model_data[[target]], ref = positive_class)
+  
   target_levels <- levels(model_data[[target]])  
   cat(sprintf("Binary classification: %s (class 1) vs %s (class 2)\n",
             target_levels[1], target_levels[2]))
@@ -290,11 +304,11 @@ all_predictions <- bind_rows(
 
 
 
-
 # Function to run binomial and multinomial classification with multiple targets simulatensouly 
 train_multiple_targets <- function(
     data_list,  
     variables = NULL,
+    positive_class_map = list(),
     metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
   
   # Store all results
@@ -320,11 +334,14 @@ train_multiple_targets <- function(
     n_classes <- length(target_values)
     print(n_classes)
 
+    pos_class <- positive_class_map[[target_name]]
+
     if (n_classes == 2) {
       # Train models for this target
       result <- train_binary_models(
         data = current_data,
         target = target_col,
+        positive_class = pos_class,
         variables = variables,
         metrics = metrics
       )
@@ -349,7 +366,6 @@ train_multiple_targets <- function(
         data = current_data,
         target = target_col,
         variables = variables,
-        k_fold = "LOOCV", 
         metrics = metrics
       )
       
