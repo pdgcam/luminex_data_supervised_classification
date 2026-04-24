@@ -91,7 +91,8 @@ train_binary_models <- function(
   }
   
   binary_control <- caret::trainControl(
-    method  = "LOOCV", 
+    method = "cv",
+    number = 5,
     summaryFunction = combinedBinary,
     classProbs = TRUE,
     verboseIter = FALSE,
@@ -133,7 +134,8 @@ train_binary_models <- function(
       data = model_data,
       metric = "ROC",
       method = "glm",
-      trControl = binary_control
+      trControl = binary_control,
+      preProcess = c("center", "scale")
     )
   } else {
     cat("Training GLM with elastic net\n")
@@ -146,7 +148,9 @@ train_binary_models <- function(
     alpha = seq(0, 1, length.out = 5),
     lambda = 10^seq(-3, 1, length.out = 20)
     ),
-  trControl = binary_control
+  trControl = binary_control,
+  preProcess = c("center", "scale")
+
   )
 }
   
@@ -172,7 +176,8 @@ train_binary_models <- function(
       tuneGrid = expand.grid(
         cp = c(0, 10^seq(-4, -1, length.out = 20))
       ),
-      trControl = binary_control
+      trControl = binary_control,
+      preProcess = c("center", "scale")
     )
   } else {
     cat("Training Random Forest\n")
@@ -185,7 +190,8 @@ train_binary_models <- function(
         mtry = mtry_values,
         splitrule = c("gini", "extratrees"),
         min.node.size = c(1, 5, 10)),
-      trControl = binary_control
+      trControl = binary_control,
+      preProcess = c("center", "scale")
     )
   }
   
@@ -196,7 +202,9 @@ train_binary_models <- function(
     metric = "ROC",
     method = "svmRadial",
     tuneLength = 10,
-    trControl = binary_control
+    trControl = binary_control,
+    preProcess = c("center", "scale")
+
   )
 
   # ---- Compute Pooled AUCs ----

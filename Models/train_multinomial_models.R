@@ -3,7 +3,8 @@ train_multinomial_models <- function(
     data,
     target,
     variables = NULL,
-    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier"),
+    univariate = FALSE) {
   
   # ---- Input Validation ----
   if (!target %in% names(data)) {
@@ -195,21 +196,35 @@ train_multinomial_models <- function(
 
   
   # ---- Train Models ----
-  cat("Training Random Forest (multiclass)\n")
-  rf_model <- tryCatch({
-    caret::train(
+ if (univariate || n_predictors == 1) {
+    cat("Training Decision Tree\n")
+    tree_model <- caret::train(
       as.formula(paste(target, "~ .")),
-      data       = model_data,
-      metric     = "AUC_Micro",
-      method     = "ranger",
-      tuneLength = 3,
-      num.trees  = 500,
-      trControl  = multi_control
+      data = model_data,
+      metric = "AUC_Micro",
+      method = "rpart",
+      tuneGrid = expand.grid(
+        cp = c(0, 10^seq(-4, -1, length.out = 20))
+      ),
+      trControl = multi_control,
+      control   = rpart::rpart.control(minsplit = 2, minbucket = 1),
+      preProcess = c("center", "scale")
     )
-  }, error = function(e) {
-    cat("Random Forest training failed:", e$message, "\n")
-    NULL
-  })
+  } else {
+    cat("Training Random Forest\n")
+    rf_model <- caret::train(
+      as.formula(paste(target, "~ .")),
+      data = model_data,
+      metric = "AUC_Micro",
+      method = "ranger",
+      tuneGrid = expand.grid(
+        mtry = mtry_values,
+        splitrule = c("gini", "extratrees"),
+        min.node.size = c(1, 5, 10)),
+      trControl = multi_control,
+      preProcess = c("center", "scale")
+    )
+  }
   
   cat("Training Naive Bayes\n")
   nb_model <- tryCatch({
@@ -218,6 +233,11 @@ train_multinomial_models <- function(
       data      = model_data,
       method    = "nb",
       metric    = "AUC_Micro",
+      tuneGrid  = expand.grid(
+      usekernel = FALSE,   
+      fL        = 1,       
+      adjust    = 1
+    ),
       trControl = multi_control
     )
   }, error = function(e) {
@@ -236,12 +256,21 @@ train_multinomial_models <- function(
     preds[mask, ]
   }
 
+
   all_predictions <- list()
 
-  if (!is.null(rf_model)) {
-    all_predictions$rf <- filter_to_best(rf_model$pred, rf_model$bestTune) %>%
-      dplyr::mutate(Model = "Random Forest")
+  if (univariate || n_predictors == 1) {
+    if (!is.null(tree_model)) {
+      all_predictions$tree <- filter_to_best(tree_model$pred, tree_model$bestTune) %>%
+        dplyr::mutate(Model = "Decision Tree")
+    }
+  } else {
+    if (!is.null(rf_model)) {
+      all_predictions$rf <- filter_to_best(rf_model$pred, rf_model$bestTune) %>%
+        dplyr::mutate(Model = "Random Forest")
+    }
   }
+
 
   if (!is.null(nb_model)) {
     all_predictions$nb <- filter_to_best(nb_model$pred, nb_model$bestTune) %>%
@@ -286,10 +315,11 @@ train_multinomial_models <- function(
     dplyr::left_join(coverage, by = "Model")
     
   # ---- Compile and Return ----
-  trained_models <- Filter(Negate(is.null), list(
-    rf = rf_model,
-    nb = nb_model
-  ))
+    trained_models <- Filter(Negate(is.null), if (univariate || n_predictors == 1) {
+    list(tree = tree_model, nb = nb_model)
+  } else {
+    list(rf = rf_model, nb = nb_model)
+  })
   
   return(list(
     models         = trained_models,

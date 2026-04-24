@@ -225,10 +225,11 @@ train_multiple_targets_univariate <- function(
     data_list,  
     variables = NULL,
     positive_class_map = list(),
+    univariate = FALSE, 
     metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
   
   # Store all results
-  all_results <- list()
+  all_results <-  list()
   all_comparisons <- list()
   all_predictions <- list()
   
@@ -250,24 +251,16 @@ train_multiple_targets_univariate <- function(
     n_classes <- length(target_values)
     print(n_classes)
     
-    # Check for only one class
-    if (n_classes < 2) {
-      warning(paste("Target", target_col, "has only 1 class. Skipping."))
-      next
-    }
-    
-    # If variables not specified, use all columns except target
-    if (is.null(variables)) {
-      variables <- setdiff(names(current_data), target_col)
-    }
-    
     # Initialize storage for this target
-    target_comparisons <- list()
-    target_predictions <- list()
-    target_results <- list()
+    all_results[[target_name]] <- list()
+    all_comparisons[[target_name]] <- list()
+    all_predictions[[target_name]] <- list()
     
     # Loop through each variable for univariate analysis
     cat("\nTesting", length(variables), "variables individually \n\n")
+    print(head(variables))
+
+    pos_class <- positive_class_map[[target_name]]
     
     for (i in seq_along(variables)) {
       var <- variables[i]
@@ -279,11 +272,7 @@ train_multiple_targets_univariate <- function(
         next
       }
       
-      tryCatch({
         if (n_classes == 2) {
-          # Look up positive class for this target, fall back to NULL if not specified
-          pos_class <- if (!is.null(positive_class_map[[target_name]])) positive_class_map[[target_name]] else NULL
-          
           result <- train_binary_models(
             data = current_data,
             target = target_col,
@@ -291,74 +280,76 @@ train_multiple_targets_univariate <- function(
             positive_class = pos_class,
             metrics = metrics
           )
+
+          # Store results
+          all_results[[target_name]][[var]] <- result
+          
+          
+          # Add target name to comparison dataframe
+          comparison_with_target <- result$comparison
+          comparison_with_target$target <- target_name
+          comparison_with_target$variable <- var
+          all_comparisons[[target_name]][[var]] <- comparison_with_target
+          
+          # Add target name to predictions dataframe
+          predictions_with_target <- result$predictions
+          predictions_with_target$target <- target_name
+          predictions_with_target$variable <- var
+          all_predictions[[target_name]][[var]] <- predictions_with_target
+
         } else if (n_classes > 2) {
           result <- train_multinomial_models(
             data = current_data,
             target = target_col,
             variables = var,
+            univariate = TRUE,
             metrics = metrics
           )
-        }
+          all_results[[target_name]][[var]] <- result
+          
+          
+          # Add target name to comparison dataframe
+          comparison_with_target <- result$comparison
+          comparison_with_target$target <- target_name
+          comparison_with_target$variable <- var
+          all_comparisons[[target_name]][[var]] <- comparison_with_target
+          
+          # Add target name to predictions dataframe
+          predictions_with_target <- result$predictions
+          predictions_with_target$target <- target_name
+          predictions_with_target$variable <- var
+          all_predictions[[target_name]][[var]] <- predictions_with_target
         
-        # Store results with variable name
-        target_results[[var]] <- result
-        
-        # Add metadata to comparison dataframe
-        comparison_with_meta <- result$comparison
-        comparison_with_meta$target <- target_name
-        comparison_with_meta$variable <- var
-        target_comparisons[[var]] <- comparison_with_meta
-        
-        # Add metadata to predictions dataframe
-        predictions_with_meta <- result$predictions
-        predictions_with_meta$target <- target_name
-        predictions_with_meta$variable <- var
-        target_predictions[[var]] <- predictions_with_meta
-        
-        cat(sprintf("Completed\n"))
-        
-      }, error = function(e) {
-        cat("  -> ERROR:", e$message, "\n")
-        warning(paste("Error processing variable", var, "for target", target_name, ":", e$message))
-      })
-    }
+      }
+    } }  
+      
+      # Combine all comparison dataframes
+      combined_comparison  <- dplyr::bind_rows(unlist(all_comparisons,  recursive = FALSE))
+      rownames(combined_comparison) <- NULL
+      col_order <- c("target", "variable", setdiff(names(combined_comparison), c("target", "variable")))
+      combined_comparison <- combined_comparison[, col_order]
+      
+      # Combine all predictions dataframes
+      combined_predictions <- dplyr::bind_rows(unlist(all_predictions, recursive = FALSE))
+      rownames(combined_predictions) <- NULL
+      pred_col_order <- c("target", "variable", setdiff(names(combined_predictions), c("target", "variable")))
+      combined_predictions <- combined_predictions[, pred_col_order]
+      
+      return(list(
+        results_by_target = all_results,
+        combined_comparison = combined_comparison,
+        combined_predictions = combined_predictions,
+        summary = list(
+          n_targets = length(all_results),
+          target_names = names(all_results),
+          n_variables_tested = length(variables),
+          variables_tested = variables,
+          metrics = metrics
+        )
+      ))
     
-    # Store results for this target
-    all_results[[target_name]] <- target_results
-    
-    if (length(target_comparisons) > 0) {
-      all_comparisons[[target_name]] <- dplyr::bind_rows(target_comparisons)
-    }
-    if (length(target_predictions) > 0) {
-      all_predictions[[target_name]] <- dplyr::bind_rows(target_predictions)
-    }
-  }
-  
-  # Combine all comparison dataframes
-  combined_comparison <- dplyr::bind_rows(all_comparisons)
-  rownames(combined_comparison) <- NULL
-  col_order <- c("target", "variable", setdiff(names(combined_comparison), c("target", "variable")))
-  combined_comparison <- combined_comparison[, col_order]
-  
-  # Combine all predictions dataframes
-  combined_predictions <- dplyr::bind_rows(all_predictions)
-  rownames(combined_predictions) <- NULL
-  pred_col_order <- c("target", "variable", setdiff(names(combined_predictions), c("target", "variable")))
-  combined_predictions <- combined_predictions[, pred_col_order]
-  
-  return(list(
-    results_by_target = all_results,
-    combined_comparison = combined_comparison,
-    combined_predictions = combined_predictions,
-    summary = list(
-      n_targets = length(all_results),
-      target_names = names(all_results),
-      n_variables_tested = length(variables),
-      variables_tested = variables,
-      metrics = metrics
-    )
-  ))
 }
+
 
 positive_class_map <- list(
   flavi       = "positive",
@@ -376,6 +367,19 @@ ratio_df_logged <- readRDS('Results/logged_ratio_df.rds')
 
 table(ratio_df$target)
 table(ratio_df_logged$target)
+
+colnames(ratio_df_logged)
+
+
+flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
+"DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
+"DENV3_DIII","DENV3_NS1","DENV3_VLP", "SHERPADES_DENV3_DIII",
+"DENV4_DIII","DENV4_NS1","DENV4_VLP", "SHERPADES_DENV4_DIII",
+"JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII","YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII")
+
+ratio_df_logged_flavi <- ratio_df_logged %>%
+  dplyr::select(target, id_patient, all_of(flavi_antigens))
+
 
 
 # ---- Binary Results 
@@ -508,11 +512,14 @@ best_models <- bind_rows(
 ) %>%
   arrange(type, target)
 
-print(best_models)
+
 saveRDS(best_models, 'Results/multivariate_best_models.rds')
 
 
-# Univariate Analysis - look at each antigen independently 
+
+# ---  Univariate Analysis - look at each antigen independently ----
+
+
 serotype_variables_flavi <- grep("DENV|ZIKV", names(ratio_df), value = TRUE)
 serotype_variables_alpha <- grep("CHIKV|ONNV|MAYV", names(ratio_df), value = TRUE)
 
@@ -521,15 +528,28 @@ univariate_results_flavi <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets,
   variables  = serotype_variables_flavi,
   metrics    = c("ROC", "AUPRC", "Brier"),
+  positive_class_map = list(flavi = "positive", 
+                            dengue = "positive") 
 )
 
-unique(univariate_results_flavi$combined_comparison$target)
+univariate_results_serotype <- train_multiple_targets_univariate(
+  data_list  = data_with_multinomial_targets,
+  variables  = serotype_variables_flavi,
+  metrics    = c("ROC", "AUPRC", "Brier"),
+  univariate = TRUE
+)
+
+univariate_results_serotype$combined_comparison
+
 
 univariate_results_alpha <- train_multiple_targets_univariate(
   data_list  = data_with_binomial_targets_chik,
   variables  = serotype_variables_alpha,
   metrics    = c("ROC", "AUPRC", "Brier"),
+  positive_class_map = list(chik = "positive", 
+                            dengue_chik = "dengue")   
 )
+
 
 # save 
 saveRDS(univariate_results_flavi, 'Results/univariate_results_flavi.rds')
@@ -538,15 +558,18 @@ saveRDS(univariate_results_alpha, 'Results/univariate_results_alpha.rds')
 univariate_results_flavi <- readRDS('Results/univariate_results_flavi.rds')
 univariate_results_alpha <- readRDS('Results/univariate_results_alpha.rds')
 
+
 model_colours <- c(
-  "GLMnet" = "#012b48",
+  "GLM" = "#012b48",
   "Decision Tree" = "#0396f8",
-  "SVM" = "#de5a7b"
+  "SVM" = "#de5a7b", 
+  "NaiveBayes" = "#ed7f01"
 )
+
 
 plot_df_dengue <- univariate_results_flavi$combined_comparison %>%
   filter(target == "dengue") %>%
-  dplyr::select(target, variable, Model, ROC) %>%
+  dplyr::select(target, variable, Model, ROC, ROC_low, ROC_high) %>%
   pivot_longer(cols = ROC, names_to = "Metric", values_to = "Value") %>%
   group_by(variable) %>%
   mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
@@ -579,26 +602,32 @@ plot_df_dengue <- plot_df_dengue %>%
     )
   )
 
-
 univariate_plot_dengue <- ggplot(
   plot_df_dengue,
-  aes(x = Value, y = variable_clean, color = Model, shape = Model)
+  aes(x = Value, y = variable_clean, color = Model)
 ) +
   geom_vline(xintercept = 0.99, linetype = "dashed", colour = "#8f0000") +
-  geom_point(size = 7, alpha = 0.9) +
-  facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
+  geom_errorbarh(
+    aes(xmin = ROC_low, xmax = ROC_high),
+    height = 0.2,
+    alpha = 0.6,
+    linewidth = 0.8,
+    position = position_dodge(width = 1.2)
+  ) + 
+  geom_point(size = 7, alpha = 0.9,
+  position = position_dodge(width = 1.2)) +
+  facet_grid(Metric ~ ., scales = "free_y") +
   scale_x_continuous(limits = c(0, 1)) +
   coord_flip() +
   scale_color_manual(values = model_colours) +
   theme_minimal() +
   theme(
     axis.text.y = element_text(size = 18), 
-    axis.text.x = element_text(size = 18, angle = 40, hjust = 1),
+    axis.text.x = element_text(size = 18, angle = 90, hjust = 1),
     axis.title.x = element_blank(),
     axis.title.y = element_blank(),
-    panel.background = element_rect(fill = "white", colour = NA),  # white background
-    plot.background  = element_rect(fill = "white", colour = NA),  # white outer bg
-    panel.grid.major.y = element_blank(),
+    panel.background = element_rect(fill = "white", colour = NA),  
+    plot.background  = element_rect(fill = "white", colour = NA), 
     panel.grid.minor = element_blank(),
     panel.grid.major.x = element_line(colour = "grey85"),
     legend.title = element_blank(),
@@ -610,7 +639,7 @@ univariate_plot_dengue <- ggplot(
 
 print(univariate_plot_dengue) 
 
-ggsave("Results/univariate_plot_dengue.png",
+ggsave("Results/NEW_univariate_plot_dengue.png",
        univariate_plot_dengue, width = 20, height = 10, dpi = 300)
 
 
@@ -655,9 +684,15 @@ plot_df_alpha <- plot_df_alpha %>%
 
 univariate_plot_alpha <- ggplot(
   plot_df_alpha,
-  aes(x = Value, y = Variable_clean, color = Model, shape = Model)
+  aes(x = Value, y = Variable_clean, color = Model)
 ) +
   geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
+  geom_errorbarh(
+    aes(xmin = ROC_low, xmax = ROC_high),
+    height = 0.2,
+    alpha = 0.6,
+    linewidth = 0.8
+  ) +
   geom_point(size = 7, alpha = 0.9) +
   facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
   scale_x_continuous(limits = c(0, 1)) +
@@ -684,4 +719,73 @@ univariate_plot_alpha <- ggplot(
 ggsave("Results/univariate_plot_alpha.png",
        univariate_plot_alpha, width = 20, height = 10, dpi = 300)
 
+unique(univariate_results_serotype$combined_comparison$Model)
 
+
+
+View(univariate_results_serotype$combined_comparison)
+
+# dengue serotype univariate plot 
+plot_df_dengue_serotype <- univariate_results_serotype$combined_comparison %>%
+  filter(target == "dengue_serotype") %>%
+  dplyr::select(target, variable, Model, AUC_Micro) %>%
+  pivot_longer(cols = AUC_Micro, names_to = "Metric", values_to = "Value") %>%
+  group_by(variable) %>%
+  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+var_order_dengue_serotype <- plot_df_dengue_serotype %>%
+  distinct(variable, mean_auc) %>%
+  arrange(desc(mean_auc)) %>%
+  mutate(
+    variable_clean = variable %>%
+      str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
+      str_replace("SHERPADES_", "SHERPADES ") %>%
+      str_replace_all("_", " ") %>%
+      str_wrap(width = 14)
+  ) %>%
+  mutate(
+    variable_clean = factor(variable_clean, levels = variable_clean)
+  )
+
+# Join labels back and explicitly set factor order
+plot_df_dengue_serotype <- plot_df_dengue_serotype %>%
+  left_join(
+    var_order_dengue_serotype %>% dplyr::select(variable, variable_clean),
+    by = "variable"
+  ) %>%
+  mutate(
+    variable_clean = factor(
+      variable_clean,
+      levels = var_order_dengue_serotype$variable_clean
+    )
+  )
+
+univariate_plot_dengue_serotype <- ggplot(
+  plot_df_dengue_serotype,
+  aes(x = Value, y = variable_clean, color = Model)
+) +
+  geom_vline(xintercept = 0.99, linetype = "dashed", colour = "#8f0000") +
+  geom_point(size = 7, alpha = 0.9,
+  position = position_dodge(width = 1.2)) +
+  facet_grid(Metric ~ ., scales = "free_y") +
+  scale_x_continuous(limits = c(0, 1)) +
+  coord_flip() +
+  scale_color_manual(values = model_colours) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 18), 
+    axis.text.x = element_text(size = 18, angle = 90, hjust = 1),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "white", colour = NA),  
+    plot.background  = element_rect(fill = "white", colour = NA), 
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey85"),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 20),
+    strip.text = element_blank(),
+    legend.position = "bottom",
+    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
+  )
+print(univariate_plot_dengue_serotype)
