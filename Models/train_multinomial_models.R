@@ -11,8 +11,6 @@ train_multinomial_models <- function(
     stop(paste("Target column", target, "not found in data"))
   }
 
-
-  
   if (is.null(variables)) {
     variables <- setdiff(names(data), c(target, "id_patient"))
   } else {
@@ -32,6 +30,7 @@ train_multinomial_models <- function(
   
   # ---- Prepare Data ----
   model_data <- data[, c(variables, target)]
+  n_predictors <- ncol(model_data) - 1
   
   # Ensure target is a factor
   if (!is.factor(model_data[[target]])) {
@@ -196,7 +195,15 @@ train_multinomial_models <- function(
 
   
   # ---- Train Models ----
- if (univariate || n_predictors == 1) {
+  n_features <- length(variables)
+  mtry_values <- unique(pmax(1, floor(c(
+    sqrt(n_features),
+    n_features / 3,
+    n_features / 2,
+    n_features
+  ))))
+  mtry_values <- mtry_values[mtry_values <= n_features]
+ if (univariate) {
     cat("Training Decision Tree\n")
     tree_model <- caret::train(
       as.formula(paste(target, "~ .")),

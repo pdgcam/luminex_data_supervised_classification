@@ -3,9 +3,7 @@ library(ggtext)
 preprocessed_data_raw <- read.csv('Results/raw_preprocessed_cebu_data.csv')
 View(preprocessed_data_raw)
 ratio_df <- readRDS('Results/ratio_df.rds')
-ratio_df_logged <- readRDS('Results/logged_ratio_df.rds')
-View(ratio_df)
-View(ratio_df_logged)
+
 
 pcr_target <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
 

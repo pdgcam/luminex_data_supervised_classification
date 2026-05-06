@@ -311,7 +311,7 @@ processed_dfs <- prepare_luminex_datasets(final_preprocessed_data_raw, patient_p
 
 # Log transform the ratio dataset 
 logged_ratio_df <- processed_dfs$ratio
-logged_ratio_df[antigen_cols] <- log2(logged_ratio_df[antigen_cols])
+logged_ratio_df[antigen_cols] <- log10(logged_ratio_df[antigen_cols])
 
 
 # Save each dataset separately (easier to load individually later)
@@ -328,7 +328,6 @@ dengue_antigens <- c(
   "DENV3_DIII", "DENV3_NS1", "DENV3_VLP", "SHERPADES_DENV3_DIII",
   "DENV4_DIII", "DENV4_NS1", "DENV4_VLP", "SHERPADES_DENV4_DIII"
 )
-
 
 
 

@@ -1,492 +1,168 @@
-
 library(caret)
-
+library(here)
+library(corrplot)
 
 # --- Source functions
 source(here('Models/train_binary_models.R'))
 source(here('Models/train_multinomial_models.R'))
+source(here('Functions.R'))
 
-    
-# Functions to select targets / classification questions 
-select_targets <- function(preprocessed_data,
-                           targets = c("flavi", "dengue", 
-                                       "zika", "chik",
-                                       "dengue_zika",  "dengue_chik",
-                                       "dengue_serotype", "dengue_serotype_neg"), 
-                                       drop_original_target = TRUE,  min_samples = 1) {
-  
-  if (!"target" %in% names(preprocessed_data)) {
-    stop('Column "Target" not found in preprocessed_data.')
-  }
-  
-  # Validate all targets
-  valid_targets <- c("flavi", "dengue", 
-                     "zika", "chik",
-                     "dengue_zika", 
-                     "dengue_serotype", "dengue_serotype_neg",
-                     "dengue_chik")
-  
-  invalid <- setdiff(targets, valid_targets)
-  if (length(invalid) > 0) {
-    stop("Invalid target(s): ", paste(invalid, collapse = ", "))
-  }
-  
-  # mappings
-  mapping_list <- list(
-    flavi               = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 1),
-    dengue              = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1),
-    zika                = c(ZIKV = 1),
-    chik                = c(CHIKV = 1),
-    dengue_zika         = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 2),
-    dengue_serotype     = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
-    dengue_serotype_neg = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
-    dengue_chik        = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, CHIKV = 2))
-  
-  # factor levels/labels
-  label_specs <- list(
-    flavi               = list(levels = c(0, 1),           labels = c("negative", "positive")),
-    dengue              = list(levels = c(0, 1),           labels = c("negative", "positive")),
-    zika                = list(levels = c(0, 1),           labels = c("negative", "positive")),
-    chik                = list(levels = c(0, 1),           labels = c("negative", "positive")),
-    dengue_zika         = list(levels = c(0, 1, 2),        labels = c("negative", "dengue", "zika")),
-    dengue_serotype     = list(levels = c(1, 2, 3, 4),     labels = c("DENV1", "DENV2", "DENV3", "DENV4")),
-    dengue_serotype_neg = list(levels = c(0, 1, 2, 3, 4),  labels = c("negative", "DENV1", "DENV2", "DENV3", "DENV4")),
-    dengue_chik         = list(levels = c(1, 2),           labels = c("dengue", "CHIKV"))
-  )
-  
-  
-  # List to store results
-  data_with_target <- list()
-  
-  # Process each target
-  for (target in targets) {
-    df_copy <- preprocessed_data
-    
-    # Build the chosen target column
-    mp <- mapping_list[[target]]
-    tgt_chr <- as.character(df_copy$target)
-    
-   # Map positives, everything else is negative (0)
-    df_copy[[target]] <- ifelse(
-      tgt_chr %in% names(mp),
-      as.numeric(dplyr::recode(tgt_chr, !!!mp, .default = NA_real_)),
-      0
-    )
-    
-    # Remove negatives for classifications that only include infected samples (eg: given infection, classify dengue vs chik)
-    if (target %in% c("dengue_chik", "dengue_serotype")) {
-      df_copy <- df_copy[df_copy[[target]] %in% c(1, 2, 3, 4), ]  # keep only mapped positives
-    }
-    # convert to factor with labels
-    spec <- label_specs[[target]]
-    df_copy[[target]] <-
-      factor(df_copy[[target]], 
-             levels = spec$levels, 
-             labels = spec$labels)
-
-    # Drop classes with fewer than min_samples
-    class_counts <- table(df_copy[[target]])
-    valid_classes <- names(class_counts[class_counts >= min_samples])
-    
-    if (length(valid_classes) < length(class_counts)) {
-      dropped <- names(class_counts[class_counts < min_samples])
-      cat(sprintf("Target '%s': dropping class(es) with < %d samples: %s\n",
-                  target, min_samples, paste(dropped, collapse = ", ")))
-      df_copy <- df_copy[df_copy[[target]] %in% valid_classes, ]
-      df_copy[[target]] <- droplevels(df_copy[[target]])  # remove unused factor levels
-    }
-    
-    
-    # drop original Target column if requested
-    if (drop_original_target) {
-      if ("target" %in% names(df_copy)) {
-        df_copy[["target"]] <- NULL
-      }
-    }
-    
-    data_with_target[[target]] <- df_copy
-  }
-  return(data_with_target)
-}
-
-
-# Function to run binomial and multinomial classification with multiple targets simulatensouly 
-train_multiple_targets <- function(
-    data_list,  
-    variables = NULL,
-    positive_class_map = list(),
-    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
-  
-  # Store all results
-  all_results <- list()
-  all_comparisons <- list()
-  all_predictions <- list()
-  
-  # Loop through each target dataset
-  for (target_name in names(data_list)) {
-    cat("Processing target:", target_name, "\n")
-    
-    current_data <- data_list[[target_name]]
-    target_col <- paste0(target_name)
-    
-    # Check if target column exists
-    if (!target_col %in% names(current_data)) {
-      warning(paste("Target column", target_col, "not found in", target_name, "data. Skipping."))
-      next
-    }
-    
-    # Determine class type based on target variable
-    target_values <- unique(current_data[[target_col]])
-    n_classes <- length(target_values)
-    print(n_classes)
-
-    if (n_classes == 2) {
-      # Train models for this target
-      result <- train_binary_models(
-        data = current_data,
-        target = target_col,
-        variables = variables,
-        positive_class = pos_class,
-        metrics = metrics
-      )
-      
-      # Store results
-      all_results[[target_name]] <- result
-      
-      # Add target name to comparison dataframe
-      comparison_with_target <- result$comparison
-      comparison_with_target$target <- target_name
-      all_comparisons[[target_name]] <- comparison_with_target
-      
-      # Add target name to predictions dataframe
-      predictions_with_target <- result$predictions
-      predictions_with_target$target <- target_name
-      all_predictions[[target_name]] <- predictions_with_target
-    }
-    
-    else if (n_classes > 2){
-      # Train models for this target
-      result <- train_multinomial_models(
-        data = current_data,
-        target = target_col,
-        variables = variables,
-        metrics = metrics
-      )
-      
-      # Store results
-      all_results[[target_name]] <- result
-      
-      # Add target name to comparison dataframe
-      comparison_with_target <- result$comparison
-      comparison_with_target$target <- target_name
-      all_comparisons[[target_name]] <- comparison_with_target
-      
-      # Add target name to predictions dataframe
-      predictions_with_target <- result$predictions
-      predictions_with_target$target <- target_name
-      all_predictions[[target_name]] <- predictions_with_target
-    }
-    
-    else {
-      warning(paste("Target", target_col, "has only 1 class. Skipping."))
-      next
-    }
-  }
-  
-  # Combine all comparison dataframes
-  combined_comparison <- do.call(rbind, all_comparisons)
-  rownames(combined_comparison) <- NULL
-  # Reorder columns to put Target first
-  col_order <- c("target", setdiff(names(combined_comparison), "target"))
-  combined_comparison <- combined_comparison[, col_order]
-  
-  # Combine all predictions dataframes
-  combined_predictions <- dplyr::bind_rows(all_predictions)
-  rownames(combined_predictions) <- NULL
-  # Reorder columns to put Target first
-  pred_col_order <- c("target", setdiff(names(combined_predictions), "target"))
-  combined_predictions <- combined_predictions[, pred_col_order]
-  
-  return(list(
-    results_by_target = all_results,
-    combined_comparison = combined_comparison,
-    combined_predictions = combined_predictions,
-    summary = list(
-      n_targets = length(all_results),
-      target_names = names(all_results),
-      metrics = metrics
-    )
-  ))
-}
-
-
-
-train_multiple_targets_univariate <- function(
-    data_list,  
-    variables = NULL,
-    positive_class_map = list(),
-    univariate = FALSE, 
-    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
-  
-  # Store all results
-  all_results <-  list()
-  all_comparisons <- list()
-  all_predictions <- list()
-  
-  # Loop through each target dataset
-  for (target_name in names(data_list)) {
-    cat("Processing target:", target_name, "\n")
-    
-    current_data <- data_list[[target_name]]
-    target_col <- paste0(target_name)
-    
-    # Check if target column exists
-    if (!target_col %in% names(current_data)) {
-      warning(paste("Target column", target_col, "not found in", target_name, "data. Skipping."))
-      next
-    }
-    
-    # Determine class type based on target variable
-    target_values <- unique(current_data[[target_col]])
-    n_classes <- length(target_values)
-    print(n_classes)
-    
-    # Initialize storage for this target
-    all_results[[target_name]] <- list()
-    all_comparisons[[target_name]] <- list()
-    all_predictions[[target_name]] <- list()
-    
-    # Loop through each variable for univariate analysis
-    cat("\nTesting", length(variables), "variables individually \n\n")
-    print(head(variables))
-
-    pos_class <- positive_class_map[[target_name]]
-    
-    for (i in seq_along(variables)) {
-      var <- variables[i]
-      cat(sprintf("[%d/%d] Testing variable: %s\n", i, length(variables), var))
-      
-      # Check if variable exists in data
-      if (!var %in% names(current_data)) {
-        warning(paste("Variable", var, "not found in data. Skipping."))
-        next
-      }
-      
-        if (n_classes == 2) {
-          result <- train_binary_models(
-            data = current_data,
-            target = target_col,
-            variables = var,
-            positive_class = pos_class,
-            metrics = metrics
-          )
-
-          # Store results
-          all_results[[target_name]][[var]] <- result
-          
-          
-          # Add target name to comparison dataframe
-          comparison_with_target <- result$comparison
-          comparison_with_target$target <- target_name
-          comparison_with_target$variable <- var
-          all_comparisons[[target_name]][[var]] <- comparison_with_target
-          
-          # Add target name to predictions dataframe
-          predictions_with_target <- result$predictions
-          predictions_with_target$target <- target_name
-          predictions_with_target$variable <- var
-          all_predictions[[target_name]][[var]] <- predictions_with_target
-
-        } else if (n_classes > 2) {
-          result <- train_multinomial_models(
-            data = current_data,
-            target = target_col,
-            variables = var,
-            univariate = TRUE,
-            metrics = metrics
-          )
-          all_results[[target_name]][[var]] <- result
-          
-          
-          # Add target name to comparison dataframe
-          comparison_with_target <- result$comparison
-          comparison_with_target$target <- target_name
-          comparison_with_target$variable <- var
-          all_comparisons[[target_name]][[var]] <- comparison_with_target
-          
-          # Add target name to predictions dataframe
-          predictions_with_target <- result$predictions
-          predictions_with_target$target <- target_name
-          predictions_with_target$variable <- var
-          all_predictions[[target_name]][[var]] <- predictions_with_target
-        
-      }
-    } }  
-      
-      # Combine all comparison dataframes
-      combined_comparison  <- dplyr::bind_rows(unlist(all_comparisons,  recursive = FALSE))
-      rownames(combined_comparison) <- NULL
-      col_order <- c("target", "variable", setdiff(names(combined_comparison), c("target", "variable")))
-      combined_comparison <- combined_comparison[, col_order]
-      
-      # Combine all predictions dataframes
-      combined_predictions <- dplyr::bind_rows(unlist(all_predictions, recursive = FALSE))
-      rownames(combined_predictions) <- NULL
-      pred_col_order <- c("target", "variable", setdiff(names(combined_predictions), c("target", "variable")))
-      combined_predictions <- combined_predictions[, pred_col_order]
-      
-      return(list(
-        results_by_target = all_results,
-        combined_comparison = combined_comparison,
-        combined_predictions = combined_predictions,
-        summary = list(
-          n_targets = length(all_results),
-          target_names = names(all_results),
-          n_variables_tested = length(variables),
-          variables_tested = variables,
-          metrics = metrics
-        )
-      ))
-    
-}
-
-
-positive_class_map <- list(
-  flavi       = "positive",
-  dengue      = "positive",
-  zika        = "positive",
-  chik        = "positive",
-  dengue_zika = "dengue",
-  dengue_chik = "dengue"
-)
 
 
 # ---- Import prepossessed datasets ---- 
-ratio_df <- readRDS('Results/ratio_df.rds')
 ratio_df_logged <- readRDS('Results/logged_ratio_df.rds')
-
-table(ratio_df$target)
+logged_preprocessed_cebu_data <- read.csv('Results/logged_preprocessed_cebu_data.csv')
 table(ratio_df_logged$target)
-
-colnames(ratio_df_logged)
-
+head(logged_preprocessed_cebu_data)
 
 flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
 "DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
 "DENV3_DIII","DENV3_NS1","DENV3_VLP", "SHERPADES_DENV3_DIII",
 "DENV4_DIII","DENV4_NS1","DENV4_VLP", "SHERPADES_DENV4_DIII",
-"JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII","YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII")
+"JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII",
+"YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII",
+"WNV_DIII","WNV_NS1","SHERPADES_WNV_DIII",
+"ZIKV_NS1","ZIKV_VLP","ZIKVAS_DIII","ZIKVSU_NS1","SHERPADES_ZIKV_DIII")
 
+alpha_antigens <- c("CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP", "SHERPADES_CHIKV_E2", 
+                    "MAYV_E2" , "SHERPADES_MAYV_E2",
+                     "ONNV_E2", "ONNV_VLP",
+                    "RR" , "SHERPADES_RR")
+
+
+# subset flavi and alpha antigens 
 ratio_df_logged_flavi <- ratio_df_logged %>%
   dplyr::select(target, id_patient, all_of(flavi_antigens))
 
+ratio_df_logged_alpha <- ratio_df_logged %>%
+  dplyr::select(target, id_patient, all_of(alpha_antigens))
 
 
-# ---- Binary Results 
+
 # Define targets / classification question
 data_with_binomial_targets <- select_targets(
-  preprocessed_data = ratio_df_logged,
+  preprocessed_data = ratio_df_logged_flavi,
   targets = c("flavi", "dengue"),
   drop_original_target = TRUE,
   min_samples = 2
 )
 
-
 data_with_binomial_targets_chik <- select_targets(
-  preprocessed_data = ratio_df_logged,
+  preprocessed_data = ratio_df_logged_alpha,
   targets = c("chik", "dengue_chik"),
   drop_original_target = TRUE,
   min_samples = 2
 )
 
 
-sum(is.na(data_with_binomial_targets_chik$chik$chik))
-sum(is.na(data_with_binomial_targets_chik$dengue_chik$dengue_chik))
-sum(is.na(data_with_binomial_targets$flavi$flavi))
-sum(is.na(data_with_binomial_targets$flavi$dengue))
-sum(is.na(data_with_binomial_targets$flavi$zika))
-
-
-# View distribution of targets
-table(data_with_binomial_targets$flavi$flavi)
-table(data_with_binomial_targets$dengue$dengue)
-table((data_with_binomial_targets_chik$dengue_chik$dengue_chik))
-table((data_with_binomial_targets_chik$chik$chik))
-
-
-
-# Fit binomial models
-binomial_modeling_results <- train_multiple_targets(
-  data_list = data_with_binomial_targets,
-  positive_class_map = positive_class_map,
-  variables = NULL,  # Uses all columns except target
-  metrics = c("ROC", "AUPRC", "Brier"))
-
-
-# Fit binomial model - for dengue vs chik 
-binomial_modeling_results_dengue_chik <- train_multiple_targets(
-  data_list = data_with_binomial_targets_chik,
-  variables = NULL,  # Uses all columns except target
-  metrics = c("ROC", "AUPRC", "Brier"),
-  positive_class_map = list(
-    chik = "positive",
-    dengue_chik = "dengue"
-  )
-)
-
-# results
-binomial_modeling_results$combined_comparison
-binomial_modeling_results_dengue_chik$combined_comparison
-
-# save 
-saveRDS(binomial_modeling_results, 'Results/binomial_modeling_results.rds')
-saveRDS(binomial_modeling_results_dengue_chik, 'Results/binomial_modeling_results_dengue_chik.rds')
-
-
-# --- Multinomial Results 
 data_with_multinomial_targets <- select_targets(
-  preprocessed_data = ratio_df_logged,
+  preprocessed_data = ratio_df_logged_flavi,
   targets = c("dengue_serotype", "dengue_serotype_neg"),
   drop_original_target = TRUE, 
   min_samples = 2
 )
 
-table(ratio_df_logged$target)
-nrow(ratio_df_logged)
-sum(is.na(data_with_multinomial_targets$dengue_serotype$dengue_serotype))
-sum(is.na(data_with_multinomial_targets$dengue_serotype_neg$dengue_serotype_neg))
+# View distribution of targets
+table(data_with_binomial_targets$data$flavi$flavi)
+table(data_with_binomial_targets$data$flavi$flavi)
+table(data_with_binomial_targets$data$dengue$dengue)
+table((data_with_binomial_targets_chik$data$dengue_chik$dengue_chik))
+table((data_with_binomial_targets_chik$data$chik$chik))
 
-
-# Drop Nas
 data_with_multinomial_targets$dengue_serotype <- na.omit(data_with_multinomial_targets$dengue_serotype)
 data_with_multinomial_targets$dengue_serotype_neg <- na.omit(data_with_multinomial_targets$dengue_serotype_neg)
+table(data_with_multinomial_targets$data$dengue_serotype$dengue_serotype)
+table(data_with_multinomial_targets$data$dengue_serotype_neg$dengue_serotype_neg)
+
+data_with_binomial_targets$data$flavi$flavi
 
 
-# View distribution of targets
-table(data_with_multinomial_targets$dengue_serotype$dengue_serotype)
-table(data_with_multinomial_targets$dengue_serotype_neg$dengue_serotype_neg)
+# ---Binomial Classification
+# Flavi vs not 
+results_flavi_vs_not <- train_binary_models(
+  data = data_with_binomial_targets$data$flavi,
+  target = "flavi",
+  positive_class = data_with_binomial_targets$positive_class_map$flavi,
+  variables = NULL,  
+  metrics = c("ROC", "AUPRC", "Brier"))
 
+results_flavi_vs_not
+
+# Dengue vs not 
+results_dengue_vs_not <- train_binary_models(
+  data = data_with_binomial_targets$data$dengue,
+  target = "dengue",
+  positive_class = data_with_binomial_targets$positive_class_map$dengue,
+  variables = NULL, 
+  metrics = c("ROC", "AUPRC", "Brier"))
+
+
+# Chik vs not 
+results_chik_vs_not <- train_binary_models(
+  data = data_with_binomial_targets_chik$data$chik,
+  target = "chik",
+  positive_class = data_with_binomial_targets_chik$positive_class_map$chik,
+  variables = NULL, 
+  metrics = c("ROC", "AUPRC", "Brier"),
+)
+
+# Dengue vs chik 
+results_dengue_vs_chik <- train_binary_models(
+  data = data_with_binomial_targets_chik$data$dengue_chik,
+  target = "dengue_chik",
+  positive_class = data_with_binomial_targets_chik$positive_class_map$dengue_chik,
+  variables = NULL, 
+  metrics = c("ROC", "AUPRC", "Brier"),
+)
+
+
+# results
+results_flavi_vs_not$comparison
+results_dengue_vs_not$comparison
+results_dengue_vs_chik$comparison
+results_chik_vs_not$comparison
+
+
+
+# --- Multinomial Results 
 
 # Given infection, classify stereotype + serotype and neg 
-dengue_serotype_results <- train_multiple_targets(
-  data = data_with_multinomial_targets,
+results_dengue_serotype <- train_multinomial_models(
+  data = data_with_multinomial_targets$data$dengue_serotype,
+  target = "dengue_serotype",
   variables = NULL,
   metrics = c("ROC", "AUPRC", "Brier", "StratBrier"))
 
+results_dengue_serotype_neg <-  train_multinomial_models(
+  data = data_with_multinomial_targets,
+  target = "dengue_serotype_neg",
+  variables = NULL,
+  metrics = c("ROC", "AUPRC", "Brier", "StratBrier"))
 
-saveRDS(dengue_serotype_results, 'Results/dengue_serotype_results.rds')
+# Save results 
+saveRDS(results_flavi_vs_not, 'Results/results_flavi_vs_not.rds')
+saveRDS(results_dengue_vs_not, 'Results/results_dengue_vs_not.rds')
+saveRDS(results_dengue_vs_chik, 'Results/results_dengue_vs_chik.rds')
+saveRDS(results_chik_vs_not, 'Results/results_chik_vs_not.rds')
+saveRDS(results_dengue_serotype, 'Results/results_dengue_serotype.rds')
+saveRDS(results_dengue_serotype_neg, 'Results/results_dengue_serotype_neg.rds')
 
 # Micro-average "takes imbalance into account" in the sense that the resulting performance is based on the proportion of every class
 # i.e.the performance of a large class has more impact on the result than of a small class.
 # Macro-average "doesn't take imbalance into account" in the sense that the resulting performance 
 # is a simple average over the classes, so every class is given equal weight independently from their proportion.
 
-# Reporting Micro Average AUC 
+
+
+
+
+
 
 # ---- Best from binomial results ----
 best_binomial <- bind_rows(
-  binomial_modeling_results$combined_comparison,
-  binomial_modeling_results_dengue_chik$combined_comparison
+  results_flavi_vs_not$combined_comparison,
+  results_dengue_vs_not$combined_comparison,
+  results_dengue_vs_chik$combined_comparison
 ) %>%
   group_by(target) %>%
   slice_max(AUROC, n = 1) %>%
@@ -496,7 +172,7 @@ best_binomial <- bind_rows(
 
 
 # ---- Best from multinomial results ----
-best_multinomial <- dengue_serotype_results$combined_comparison %>%
+best_multinomial <- results_dengue_serotype$combined_comparison %>%
   group_by(target) %>%
   slice_max(AUC_Micro, n = 1) %>%
   ungroup() %>%
@@ -516,276 +192,3 @@ best_models <- bind_rows(
 saveRDS(best_models, 'Results/multivariate_best_models.rds')
 
 
-
-# ---  Univariate Analysis - look at each antigen independently ----
-
-
-serotype_variables_flavi <- grep("DENV|ZIKV", names(ratio_df), value = TRUE)
-serotype_variables_alpha <- grep("CHIKV|ONNV|MAYV", names(ratio_df), value = TRUE)
-
-
-univariate_results_flavi <- train_multiple_targets_univariate(
-  data_list  = data_with_binomial_targets,
-  variables  = serotype_variables_flavi,
-  metrics    = c("ROC", "AUPRC", "Brier"),
-  positive_class_map = list(flavi = "positive", 
-                            dengue = "positive") 
-)
-
-univariate_results_serotype <- train_multiple_targets_univariate(
-  data_list  = data_with_multinomial_targets,
-  variables  = serotype_variables_flavi,
-  metrics    = c("ROC", "AUPRC", "Brier"),
-  univariate = TRUE
-)
-
-univariate_results_serotype$combined_comparison
-
-
-univariate_results_alpha <- train_multiple_targets_univariate(
-  data_list  = data_with_binomial_targets_chik,
-  variables  = serotype_variables_alpha,
-  metrics    = c("ROC", "AUPRC", "Brier"),
-  positive_class_map = list(chik = "positive", 
-                            dengue_chik = "dengue")   
-)
-
-
-# save 
-saveRDS(univariate_results_flavi, 'Results/univariate_results_flavi.rds')
-saveRDS(univariate_results_alpha, 'Results/univariate_results_alpha.rds')
-
-univariate_results_flavi <- readRDS('Results/univariate_results_flavi.rds')
-univariate_results_alpha <- readRDS('Results/univariate_results_alpha.rds')
-
-
-model_colours <- c(
-  "GLM" = "#012b48",
-  "Decision Tree" = "#0396f8",
-  "SVM" = "#de5a7b", 
-  "NaiveBayes" = "#ed7f01"
-)
-
-
-plot_df_dengue <- univariate_results_flavi$combined_comparison %>%
-  filter(target == "dengue") %>%
-  dplyr::select(target, variable, Model, ROC, ROC_low, ROC_high) %>%
-  pivot_longer(cols = ROC, names_to = "Metric", values_to = "Value") %>%
-  group_by(variable) %>%
-  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
-  ungroup()
-
-var_order_dengue <- plot_df_dengue %>%
-  distinct(variable, mean_auc) %>%
-  arrange(desc(mean_auc)) %>%
-  mutate(
-    variable_clean = variable %>%
-      str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
-      str_replace("SHERPADES_", "SHERPADES ") %>%
-      str_replace_all("_", " ") %>%
-      str_wrap(width = 14)
-  ) %>%
-  mutate(
-    variable_clean = factor(variable_clean, levels = variable_clean)
-  )
-
-# Join labels back and explicitly set factor order
-plot_df_dengue <- plot_df_dengue %>%
-  left_join(
-    var_order_dengue %>% dplyr::select(variable, variable_clean),
-    by = "variable"
-  ) %>%
-  mutate(
-    variable_clean = factor(
-      variable_clean,
-      levels = var_order_dengue$variable_clean
-    )
-  )
-
-univariate_plot_dengue <- ggplot(
-  plot_df_dengue,
-  aes(x = Value, y = variable_clean, color = Model)
-) +
-  geom_vline(xintercept = 0.99, linetype = "dashed", colour = "#8f0000") +
-  geom_errorbarh(
-    aes(xmin = ROC_low, xmax = ROC_high),
-    height = 0.2,
-    alpha = 0.6,
-    linewidth = 0.8,
-    position = position_dodge(width = 1.2)
-  ) + 
-  geom_point(size = 7, alpha = 0.9,
-  position = position_dodge(width = 1.2)) +
-  facet_grid(Metric ~ ., scales = "free_y") +
-  scale_x_continuous(limits = c(0, 1)) +
-  coord_flip() +
-  scale_color_manual(values = model_colours) +
-  theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 18), 
-    axis.text.x = element_text(size = 18, angle = 90, hjust = 1),
-    axis.title.x = element_blank(),
-    axis.title.y = element_blank(),
-    panel.background = element_rect(fill = "white", colour = NA),  
-    plot.background  = element_rect(fill = "white", colour = NA), 
-    panel.grid.minor = element_blank(),
-    panel.grid.major.x = element_line(colour = "grey85"),
-    legend.title = element_blank(),
-    legend.text = element_text(size = 20),
-    strip.text = element_blank(),
-    legend.position = "bottom",
-    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
-  )
-
-print(univariate_plot_dengue) 
-
-ggsave("Results/NEW_univariate_plot_dengue.png",
-       univariate_plot_dengue, width = 20, height = 10, dpi = 300)
-
-
-
-
-# CHIK Univariate results 
-plot_df_alpha <- univariate_results_alpha$combined_comparison %>%
-  filter(target == "chik") %>%
-  dplyr::select(target, variable, Model, ROC) %>%
-  pivot_longer(cols = ROC, names_to = "Metric", values_to = "Value") %>%
-  group_by(variable) %>%
-  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
-  ungroup()
-
-var_order_alpha <- plot_df_alpha %>%
-  distinct(Variable, mean_auc) %>%
-  arrange(desc(mean_auc)) %>%
-  mutate(
-    Variable_clean = Variable %>%
-      str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
-      str_replace("SHERPADES_", "SHERPADES ") %>%
-      str_replace_all("_", " ") %>%
-      str_wrap(width = 14)
-  ) %>%
-  mutate(
-    Variable_clean = factor(Variable_clean, levels = Variable_clean)
-  )
-
-# Join labels back and explicitly set factor order
-plot_df_alpha <- plot_df_alpha %>%
-  left_join(
-    var_order_alpha %>% dplyr::select(Variable, Variable_clean),
-    by = "Variable"
-  ) %>%
-  mutate(
-    Variable_clean = factor(
-      Variable_clean,
-      levels = var_order_alpha$Variable_clean
-    )
-  )
-
-
-univariate_plot_alpha <- ggplot(
-  plot_df_alpha,
-  aes(x = Value, y = Variable_clean, color = Model)
-) +
-  geom_vline(xintercept = 1, linetype = "dashed", colour = "#8f0000") +
-  geom_errorbarh(
-    aes(xmin = ROC_low, xmax = ROC_high),
-    height = 0.2,
-    alpha = 0.6,
-    linewidth = 0.8
-  ) +
-  geom_point(size = 7, alpha = 0.9) +
-  facet_grid(Metric ~ ., scales = "free_y") +  # flipped facet direction
-  scale_x_continuous(limits = c(0, 1)) +
-  coord_flip() +
-  scale_color_manual(values = model_colours) +
-  theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 18), 
-    axis.text.x = element_text(size = 18, angle = 40, hjust = 1),
-    axis.title.x = element_blank(),
-    axis.title.y = element_blank(),
-    panel.background = element_rect(fill = "white", colour = NA),  # white background
-    plot.background  = element_rect(fill = "white", colour = NA),  # white outer bg
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank(),
-    panel.grid.major.x = element_line(colour = "grey85"),
-    legend.title = element_blank(),
-    legend.text = element_text(size = 20),
-    strip.text = element_blank(),
-    legend.position = "bottom",
-    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
-  ) 
-
-ggsave("Results/univariate_plot_alpha.png",
-       univariate_plot_alpha, width = 20, height = 10, dpi = 300)
-
-unique(univariate_results_serotype$combined_comparison$Model)
-
-
-
-View(univariate_results_serotype$combined_comparison)
-
-# dengue serotype univariate plot 
-plot_df_dengue_serotype <- univariate_results_serotype$combined_comparison %>%
-  filter(target == "dengue_serotype") %>%
-  dplyr::select(target, variable, Model, AUC_Micro) %>%
-  pivot_longer(cols = AUC_Micro, names_to = "Metric", values_to = "Value") %>%
-  group_by(variable) %>%
-  mutate(mean_auc = mean(Value, na.rm = TRUE)) %>%
-  ungroup()
-
-var_order_dengue_serotype <- plot_df_dengue_serotype %>%
-  distinct(variable, mean_auc) %>%
-  arrange(desc(mean_auc)) %>%
-  mutate(
-    variable_clean = variable %>%
-      str_replace("SHERPADES_([^_]+)_DIII", "SHERPADES_\\1") %>%  # removes DIII only after SHERPADES
-      str_replace("SHERPADES_", "SHERPADES ") %>%
-      str_replace_all("_", " ") %>%
-      str_wrap(width = 14)
-  ) %>%
-  mutate(
-    variable_clean = factor(variable_clean, levels = variable_clean)
-  )
-
-# Join labels back and explicitly set factor order
-plot_df_dengue_serotype <- plot_df_dengue_serotype %>%
-  left_join(
-    var_order_dengue_serotype %>% dplyr::select(variable, variable_clean),
-    by = "variable"
-  ) %>%
-  mutate(
-    variable_clean = factor(
-      variable_clean,
-      levels = var_order_dengue_serotype$variable_clean
-    )
-  )
-
-univariate_plot_dengue_serotype <- ggplot(
-  plot_df_dengue_serotype,
-  aes(x = Value, y = variable_clean, color = Model)
-) +
-  geom_vline(xintercept = 0.99, linetype = "dashed", colour = "#8f0000") +
-  geom_point(size = 7, alpha = 0.9,
-  position = position_dodge(width = 1.2)) +
-  facet_grid(Metric ~ ., scales = "free_y") +
-  scale_x_continuous(limits = c(0, 1)) +
-  coord_flip() +
-  scale_color_manual(values = model_colours) +
-  theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 18), 
-    axis.text.x = element_text(size = 18, angle = 90, hjust = 1),
-    axis.title.x = element_blank(),
-    axis.title.y = element_blank(),
-    panel.background = element_rect(fill = "white", colour = NA),  
-    plot.background  = element_rect(fill = "white", colour = NA), 
-    panel.grid.minor = element_blank(),
-    panel.grid.major.x = element_line(colour = "grey85"),
-    legend.title = element_blank(),
-    legend.text = element_text(size = 20),
-    strip.text = element_blank(),
-    legend.position = "bottom",
-    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
-  )
-print(univariate_plot_dengue_serotype)

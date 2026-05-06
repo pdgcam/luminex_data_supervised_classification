@@ -91,12 +91,13 @@ train_binary_models <- function(
   }
   
   binary_control <- caret::trainControl(
-    method = "cv",
+    method = "repeatedcv",
     number = 5,
+    repeats = 20,
     summaryFunction = combinedBinary,
     classProbs = TRUE,
     verboseIter = FALSE,
-    savePredictions = "all")
+    savePredictions = "final")
 
   # ---- pooled AUC from held-out predictions ---- 
   # pooled == single AUC computed on all held-out predictions concatenated across folds
@@ -122,6 +123,31 @@ train_binary_models <- function(
     )
     ci <- pROC::ci.auc(roc_obj, conf.level = 0.95)
     list(auc = as.numeric(ci[2]), ci_low = as.numeric(ci[1]), ci_high = as.numeric(ci[3]))
+      # ---- average fold-wise AUC ----
+      fold_aucs <- pooled_best %>%
+        dplyr::group_by(Resample) %>%
+        dplyr::summarise(
+          auc = as.numeric(
+            pROC::auc(
+              response  = obs,
+              predictor = .data[[pos_name]]
+            )
+          ),
+          .groups = "drop"
+        )
+      
+      mean_fold_auc <- mean(fold_aucs$auc, na.rm = TRUE)
+      sd_fold_auc   <- sd(fold_aucs$auc, na.rm = TRUE)
+      
+      list(
+        auc           = as.numeric(ci[2]),   
+        pooled_auc    = as.numeric(ci[2]),
+        ci_low        = as.numeric(ci[1]),
+        ci_high       = as.numeric(ci[3]),
+        mean_fold_auc = mean_fold_auc,
+        sd_fold_auc   = sd_fold_auc,
+        fold_aucs     = fold_aucs
+      )
   }
   
   # ---- Train Models ----
@@ -306,120 +332,7 @@ all_predictions <- bind_rows(
     variables_used = variables,
     target_used    = target,
     target_levels  = target_levels, 
-    method         = "LOOCV",
+    method         = "cv",
     metrics        = metrics))
-}
-
-
-
-# Function to run binomial and multinomial classification with multiple targets simulatensouly 
-train_multiple_targets <- function(
-    data_list,  
-    variables = NULL,
-    positive_class_map = list(),
-    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
-  
-  # Store all results
-  all_results <- list()
-  all_comparisons <- list()
-  all_predictions <- list()
-  
-  # Loop through each target dataset
-  for (target_name in names(data_list)) {
-    cat("Processing target:", target_name, "\n")
-    
-    current_data <- data_list[[target_name]]
-    target_col <- paste0(target_name)
-    
-    # Check if target column exists
-    if (!target_col %in% names(current_data)) {
-      warning(paste("Target column", target_col, "not found in", target_name, "data. Skipping."))
-      next
-    }
-    
-    # Determine class type based on target variable
-    target_values <- unique(current_data[[target_col]])
-    n_classes <- length(target_values)
-    print(n_classes)
-
-    pos_class <- positive_class_map[[target_name]]
-
-    if (n_classes == 2) {
-      # Train models for this target
-      result <- train_binary_models(
-        data = current_data,
-        target = target_col,
-        positive_class = pos_class,
-        variables = variables,
-        metrics = metrics
-      )
-      
-      # Store results
-      all_results[[target_name]] <- result
-      
-      # Add target name to comparison dataframe
-      comparison_with_target <- result$comparison
-      comparison_with_target$target <- target_name
-      all_comparisons[[target_name]] <- comparison_with_target
-      
-      # Add target name to predictions dataframe
-      predictions_with_target <- result$predictions
-      predictions_with_target$target <- target_name
-      all_predictions[[target_name]] <- predictions_with_target
-    }
-    
-    else if (n_classes > 2){
-      # Train models for this target
-      result <- train_multinomial_models(
-        data = current_data,
-        target = target_col,
-        variables = variables,
-        metrics = metrics
-      )
-      
-      # Store results
-      all_results[[target_name]] <- result
-      
-      # Add target name to comparison dataframe
-      comparison_with_target <- result$comparison
-      comparison_with_target$target <- target_name
-      all_comparisons[[target_name]] <- comparison_with_target
-      
-      # Add target name to predictions dataframe
-      predictions_with_target <- result$predictions
-      predictions_with_target$target <- target_name
-      all_predictions[[target_name]] <- predictions_with_target
-    }
-    
-    else {
-      warning(paste("Target", target_col, "has only 1 class. Skipping."))
-      next
-    }
-  }
-  
-  # Combine all comparison dataframes
-  combined_comparison <- do.call(rbind, all_comparisons)
-  rownames(combined_comparison) <- NULL
-  # Reorder columns to put Target first
-  col_order <- c("target", setdiff(names(combined_comparison), "target"))
-  combined_comparison <- combined_comparison[, col_order]
-  
-  # Combine all predictions dataframes
-  combined_predictions <- dplyr::bind_rows(all_predictions)
-  rownames(combined_predictions) <- NULL
-  # Reorder columns to put Target first
-  pred_col_order <- c("target", setdiff(names(combined_predictions), "target"))
-  combined_predictions <- combined_predictions[, pred_col_order]
-  
-  return(list(
-    results_by_target = all_results,
-    combined_comparison = combined_comparison,
-    combined_predictions = combined_predictions,
-    summary = list(
-      n_targets = length(all_results),
-      target_names = names(all_results),
-      metrics = metrics
-    )
-  ))
 }
 
