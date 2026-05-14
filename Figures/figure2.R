@@ -1,15 +1,15 @@
-
 library(grid)
+library(ggplot2)
+library(dplyr)
 
 # import ratio df 
 logged_preprocessed_cebu_data <- read.csv('Results/logged_preprocessed_cebu_data.csv')
 
-standardised_preprocessed_cebu_data <- read.csv('Results/standardised_preprocessed_cebu_data.csv')
 
 colnames(logged_preprocessed_cebu_data)
 
 # Define antigen groups
-flavivirus_antigens <- c(
+dengue_zika_antigens <- c(
   "DENV1_DIII", "DENV1_VLP", "DENV1_NS1",
   "DENV2_DIII", "DENV2_VLP", "DENV2_NS1",
   "DENV3_DIII", "DENV3_VLP", "DENV3_NS1",
@@ -20,7 +20,7 @@ flavivirus_antigens <- c(
   "SHERPADES_ZIKV_DIII"
 )
 
-alphavirus_antigens <- c(
+chik_onnv_mayv_antigens <- c(
   "CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP",
   "ONNV_E2", "ONNV_VLP",
   "MAYV_E2" 
@@ -39,7 +39,7 @@ pcr_colours <- c(
 
 
 # --- Prepare data for a given isotype 
-prepare_antibody_data <- function(data, isotype, antigens = c(flavivirus_antigens, alphavirus_antigens)) {
+prepare_antibody_data <- function(data, isotype, antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens)) {
   
   data %>%
     filter(isotype == !!isotype) %>%
@@ -195,33 +195,27 @@ plot_antibody_dynamics <- function(data,
 }
 
 
-igg_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgG", antigens = c(flavivirus_antigens, alphavirus_antigens))
-igm_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgM", antigens = c(flavivirus_antigens, alphavirus_antigens))
-iga_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgA", antigens = c(flavivirus_antigens, alphavirus_antigens))
-avidity_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "avidity", antigens = c(flavivirus_antigens, alphavirus_antigens))
-
-igg_data_standardised <- prepare_antibody_data(standardised_preprocessed_cebu_data, "IgG", antigens = c(flavivirus_antigens, alphavirus_antigens))
-
+igg_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgG", antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens))
+igm_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgM", antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens))
+iga_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "IgA", antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens))
+avidity_data <- prepare_antibody_data(logged_preprocessed_cebu_data, "avidity", antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens))
 
 
 # Plot separately
 igg_flavi <- plot_antibody_dynamics(igg_data, "IgG", "Flavivirus")
 igg_alpha <- plot_antibody_dynamics(igg_data, "IgG", "Alphavirus")
 
-igg_flavi_standardised <- plot_antibody_dynamics(igg_data_standardised, "IgG", "Flavivirus")
-igg_alpha_standardised <- plot_antibody_dynamics(igg_data_standardised, "IgG", "Alphavirus")
 
 print(igg_flavi)
 print(igg_alpha)
-print(igg_flavi_standardised)
-print(igg_alpha_standardised)
+
 
 # save IgG 
-ggsave("Results/flavivirus_IgG_dynamics.png", 
+ggsave("Results/dynamics_flavivirus_IgG_.png", 
 igg_flavi, width = 25, height = 12)
 
 # save IgG 
-ggsave("Results/alphavirus_IgG_dynamics.png", 
+ggsave("Results/dynamics_alphavirus_IgG_.png", 
 igg_alpha, width = 8, height = 10)
 
 
@@ -230,7 +224,8 @@ igm_flavi <- plot_antibody_dynamics(igm_data, "IgM", "Flavivirus")
 iga_flavi <- plot_antibody_dynamics(iga_data, "IgA", "Flavivirus")
 avidity_flavi <- plot_antibody_dynamics(avidity_data, "Avidity", "Flavivirus")
 
-print(iga_flavi)
+
 print(igm_flavi)
+print(iga_flavi)
 print(avidity_flavi)
 

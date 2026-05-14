@@ -2,7 +2,6 @@
 source(here('Models/train_binary_models.R'))
 source(here('Models/train_multinomial_models.R'))
 
-
 # function for univariate analysis across multiple targets
 train_multiple_targets_univariate <- function(
     data_list,  
@@ -133,80 +132,10 @@ train_multiple_targets_univariate <- function(
     
 }
 
-forward_stepwise_selection <- function(
-    univariate_results,   # output from train_multiple_targets_univariate
-    data_list,
-    positive_class_map = list(),
-    metrics = c("ROC")) {
-  
-  all_stepwise <- list()
-  
-  for (target_name in names(univariate_results$results_by_target)) {
-    cat("Forward selection for target:", target_name, "\n")
-    
-    current_data <- data_list[[target_name]]
-    pos_class    <- positive_class_map[[target_name]]
-    
-    # ---- Rank variables by univariate AUC (best first) ----
-    target_comparisons <- univariate_results$combined_comparison %>%
-      filter(target == target_name) %>%
-      arrange(desc(ROC))
-    
-    ranked_vars <- target_comparisons$variable
-    
-    # ---- Greedy forward steps ----
-    selected  <- c()
-    step_aucs <- c()
-    
-    for (var in ranked_vars) {
-      selected <- c(selected, var)
-      cat(sprintf("  Step %d: %s\n", length(selected), paste(selected, collapse = " + ")))
-      
-      result <- train_binary_models(
-        data          = current_data,
-        target        = target_name,
-        variables     = selected,
-        positive_class = pos_class,
-        metrics       = metrics
-      )
-      
-      # Pull GLM AUC (most stable for stepwise)
-      step_auc <- result$pooled_aucs$glm$auc
-      step_aucs <- c(step_aucs, step_auc)
-      cat(sprintf("    AUC: %.3f\n", step_auc))
-    }
-    
-    # ---- Compile results ----
-    all_stepwise[[target_name]] <- data.frame(
-      step     = seq_along(ranked_vars),
-      variable = ranked_vars,
-      AUC      = step_aucs,
-      gain     = c(NA, diff(step_aucs))
-    )
-  }
-  
-  return(all_stepwise)
-}
-
-
-# ---- Import prepossessed datasets ---- 
-ratio_df <- readRDS('Results/ratio_df.rds')
-ratio_df_logged <- readRDS('Results/logged_ratio_df.rds')
-ratio_df_logged
 
 serotype_variables_flavi <- grep("DENV|ZIKV", names(ratio_df), value = TRUE)
 serotype_variables_alpha <- grep("CHIKV|ONNV|MAYV", names(ratio_df), value = TRUE)
 
-
-
-flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
-"DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
-"DENV3_DIII","DENV3_NS1","DENV3_VLP", "SHERPADES_DENV3_DIII",
-"DENV4_DIII","DENV4_NS1","DENV4_VLP", "SHERPADES_DENV4_DIII",
-"JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII","YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII", 'target', 'id_patient')
-
-ratio_df_logged_flavi <- ratio_df_logged %>%
-  dplyr::select(target, id_patient, all_of(flavi_antigens))
 
 # Define targets / classification question
 data_with_binomial_targets <- select_targets(
@@ -216,9 +145,8 @@ data_with_binomial_targets <- select_targets(
   min_samples = 2
 )
 
-
 univariate_results_flavi <- train_multiple_targets_univariate(
-  data_list  = data_with_binomial_targets,
+  data_list  = data_with_binomial_targets$data,
   variables  = serotype_variables_flavi,
   metrics    = c("ROC", "AUPRC", "Brier"),
   positive_class_map = list(flavi = "positive", 
@@ -227,79 +155,11 @@ univariate_results_flavi <- train_multiple_targets_univariate(
 
 
 univariate_results_serotype <- train_multiple_targets_univariate(
-  data_list  = data_with_multinomial_targets,
+  data_list  = data_with_multinomial_targets$data,
   variables  = serotype_variables_flavi,
   metrics    = c("ROC", "AUPRC", "Brier"),
   univariate = TRUE
 )
-
-
-
-stepwise_results <- forward_stepwise_selection(
-  univariate_results = univariate_results_flavi,
-  data_list          = data_with_binomial_targets,
-  positive_class_map = list(flavi = "positive", 
-                            dengue = "positive") 
-)
-
-# View results for one target
-print(stepwise_results$flavi)
-
-
-
-plot_stepwise_results <- function(stepwise_results) {
-  
-  # Combine all targets into one df
-  combined <- bind_rows(
-    lapply(names(stepwise_results), function(t) {
-      stepwise_results[[t]]$target <- t
-      stepwise_results[[t]]
-    })
-  )
-  
-  # Order within each target by descending AUC
-  combined <- combined %>%
-    group_by(target) %>%
-    arrange(desc(AUC), .by_group = TRUE) %>%
-    mutate(auc_rank = row_number()) %>%
-    ungroup()
-  
-  ggplot(combined, aes(x = auc_rank, y = AUC)) +
-    geom_line(colour = "steelblue", linewidth = 0.8) +
-    geom_point(colour = "steelblue", size = 2.5) +
-    geom_text(
-      aes(label = variable),
-      angle = 30,
-      hjust = 0,
-      vjust = -0.8,
-      size = 2.8
-    ) +
-    scale_x_continuous(
-      breaks = seq_len(max(combined$auc_rank))
-    ) +
-    scale_y_continuous(limits = c(NA, 1.05)) +
-    facet_wrap(~ target, scales = "free_x") +
-    labs(
-      x = "AUC Rank",
-      y = "AUC",
-      title = "Forward stepwise selection ordered by AUC"
-    ) +
-    theme_minimal()
-}
-
-plot_stepwise_results(stepwise_results$flavi)
-stepwise_results
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -311,7 +171,6 @@ univariate_results_alpha <- train_multiple_targets_univariate(
                             dengue_chik = "dengue")   
 )
 
-univariate_results_flavi$combined_comparison
 
 # save 
 saveRDS(univariate_results_flavi, 'Results/univariate_results_flavi.rds')
@@ -374,10 +233,10 @@ univariate_plot_dengue <- ggplot(
     height = 0.2,
     alpha = 0.6,
     linewidth = 0.8,
-    position = position_dodge(width = 1.2)
+    position = position_dodge(width = 0.8)
   ) + 
   geom_point(size = 7, alpha = 0.9,
-  position = position_dodge(width = 1.2)) +
+  position = position_dodge(width = 0.8)) +
   facet_grid(Metric ~ ., scales = "free_y") +
   scale_x_continuous(limits = c(0, 1)) +
   coord_flip() +
@@ -396,7 +255,7 @@ univariate_plot_dengue <- ggplot(
     legend.text = element_text(size = 20),
     strip.text = element_blank(),
     legend.position = "bottom",
-    plot.margin = margin(t = 10, r = 22, b = 10, l = 10)
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 10)
   )
 
 print(univariate_plot_dengue) 
@@ -553,3 +412,5 @@ univariate_plot_dengue_serotype <- ggplot(
 print(univariate_plot_dengue_serotype)
 
 
+ggsave("Results/NEW_univariate_plot_dengue_serotype.png",
+       univariate_plot_dengue_serotype, width = 20, height = 10, dpi = 300)

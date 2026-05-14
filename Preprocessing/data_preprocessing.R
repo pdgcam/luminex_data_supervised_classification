@@ -26,7 +26,6 @@ library(tidyverse)
 library(standardize)
 
 
-
 #--- source functions
 source(here('/Users/ap2488/Documents/GitHub/luminex_data_supervised_classification/Functions.R'))
 
@@ -58,6 +57,8 @@ prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pr
 
    # ---- Dataset 1: Post/Pre Ratio ----
   ratio_df <- raw_data %>%
+    # remove day 0 
+    filter(days_since_infection != 0) %>%
     # Label pre vs post
     mutate(timepoint = ifelse(days_since_infection <= pre_threshold, 'pre', 'post')) %>%
     # Average across all pre and post samples for each anitgen and each patient 
@@ -112,11 +113,15 @@ validation_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/M
 random_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/MIA_DataBaseOut_RandomSubset.csv")
 cebu_mutiple_antigens <- read_excel("/Users/ap2488/Desktop/supervised_learning_flavi/db_philippines_IgG_IgA_IgM_avidity.xlsx")
 
-unique(cebu_mutiple_antigens$antigen)
+View(cebu_mutiple_antigens)
+
+
 
 # align patient IDs / PCR cols across datasets
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
+
+
 
 
 # pivot to get RAU as main data
@@ -244,14 +249,8 @@ final_preprocessed_data_raw <- final_preprocessed_data
 
 # Create the logged version as a separate dataframe
 final_preprocessed_data_log <- final_preprocessed_data
-final_preprocessed_data_log[antigen_cols] <- log2(final_preprocessed_data_log[antigen_cols])
+final_preprocessed_data_log[antigen_cols] <- log10(final_preprocessed_data_log[antigen_cols])
 
-# standardised data 
-# (x - mean) / sd
-final_preprocessed_data_standardised <- final_preprocessed_data
-final_preprocessed_data_standardised[antigen_cols] <- scale(final_preprocessed_data_standardised[antigen_cols])
-
-View(final_preprocessed_data_standardised)
 
 # Create patient-level mapping
 patient_pcr_mapping <- final_preprocessed_data_raw %>%
@@ -302,13 +301,12 @@ write.csv(final_preprocessed_data_raw,
 write.csv(final_preprocessed_data_log,
 "Results/logged_preprocessed_cebu_data.csv")
 
-write.csv(final_preprocessed_data_standardised,
-"Results/standardised_preprocessed_cebu_data.csv")
+View(final_preprocessed_data_raw)
 
 # --- calculate  post / pre ratios and extract crosssectional data (use unloged data)
 processed_dfs <- prepare_luminex_datasets(final_preprocessed_data_raw, patient_pcr_mapping, antigen_cols, pre_threshold = -1)
 
-
+logged_ratio_df
 # Log transform the ratio dataset 
 logged_ratio_df <- processed_dfs$ratio
 logged_ratio_df[antigen_cols] <- log10(logged_ratio_df[antigen_cols])
@@ -319,46 +317,3 @@ saveRDS(processed_dfs$ratio,"Results/ratio_df.rds")
 saveRDS(logged_ratio_df, "Results/logged_ratio_df.rds")
 saveRDS(processed_dfs$cross_sectional_data, "Results/cross_sectional_df.rds")
 
-
-
-# values per antigen
-dengue_antigens <- c(
-  "DENV1_DIII", "DENV1_NS1", "DENV1_VLP", "SHERPADES_DENV1_DIII",
-  "DENV2_DIII", "DENV2_NS1", "DENV2_VLP", "SHERPADES_DENV2_DIII",
-  "DENV3_DIII", "DENV3_NS1", "DENV3_VLP", "SHERPADES_DENV3_DIII",
-  "DENV4_DIII", "DENV4_NS1", "DENV4_VLP", "SHERPADES_DENV4_DIII"
-)
-
-
-
-final_preprocessed_data_log[dengue_antigens] %>%
-  pivot_longer(everything(), names_to = "antigen", values_to = "value") %>%
-  ggplot(aes(x = value)) +
-  geom_histogram(bins = 20, fill = "#024a9c", color = "white", alpha = 0.8) +
-  facet_wrap(~ antigen, scales = "free",  ncol = 3) +
-  theme_minimal(base_size = 10) +
-  theme(
-    strip.text       = element_text(size = 8),
-    panel.grid.minor = element_blank(),
-    axis.title.x     = element_blank(),
-    axis.title.y     = element_blank()
-  )
-
-
-
-
-final_preprocessed_data_raw[dengue_antigens] %>%
-  pivot_longer(everything(), names_to = "antigen", values_to = "value") %>%
-  ggplot(aes(x = value)) +
-  geom_histogram(bins = 20, fill = "#024a9c", color = "white", alpha = 0.8) +
-  facet_wrap(~ antigen, scales = "free",  ncol = 3) +
-  theme_minimal(base_size = 10) +
-  theme(
-    strip.text       = element_text(size = 8),
-    panel.grid.minor = element_blank(),
-    axis.title.x     = element_blank(),
-    axis.title.y     = element_blank()
-  )
-
-
-max(cebu_pivot[dengue_antigens])

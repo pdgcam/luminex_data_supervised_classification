@@ -11,9 +11,8 @@ source(here('Functions.R'))
 
 # ---- Import prepossessed datasets ---- 
 ratio_df_logged <- readRDS('Results/logged_ratio_df.rds')
-logged_preprocessed_cebu_data <- read.csv('Results/logged_preprocessed_cebu_data.csv')
 table(ratio_df_logged$target)
-head(logged_preprocessed_cebu_data)
+
 
 flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
 "DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
@@ -26,7 +25,7 @@ flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
 
 alpha_antigens <- c("CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP", "SHERPADES_CHIKV_E2", 
                     "MAYV_E2" , "SHERPADES_MAYV_E2",
-                     "ONNV_E2", "ONNV_VLP",
+                    "ONNV_E2", "ONNV_VLP",
                     "RR" , "SHERPADES_RR")
 
 
@@ -37,8 +36,6 @@ ratio_df_logged_flavi <- ratio_df_logged %>%
 ratio_df_logged_alpha <- ratio_df_logged %>%
   dplyr::select(target, id_patient, all_of(alpha_antigens))
 
-
-
 # Define targets / classification question
 data_with_binomial_targets <- select_targets(
   preprocessed_data = ratio_df_logged_flavi,
@@ -46,6 +43,7 @@ data_with_binomial_targets <- select_targets(
   drop_original_target = TRUE,
   min_samples = 2
 )
+
 
 data_with_binomial_targets_chik <- select_targets(
   preprocessed_data = ratio_df_logged_alpha,
@@ -74,7 +72,6 @@ data_with_multinomial_targets$dengue_serotype_neg <- na.omit(data_with_multinomi
 table(data_with_multinomial_targets$data$dengue_serotype$dengue_serotype)
 table(data_with_multinomial_targets$data$dengue_serotype_neg$dengue_serotype_neg)
 
-data_with_binomial_targets$data$flavi$flavi
 
 
 # ---Binomial Classification
@@ -86,7 +83,8 @@ results_flavi_vs_not <- train_binary_models(
   variables = NULL,  
   metrics = c("ROC", "AUPRC", "Brier"))
 
-results_flavi_vs_not
+results_flavi_vs_not$comparison
+
 
 # Dengue vs not 
 results_dengue_vs_not <- train_binary_models(
@@ -96,6 +94,7 @@ results_dengue_vs_not <- train_binary_models(
   variables = NULL, 
   metrics = c("ROC", "AUPRC", "Brier"))
 
+results_dengue_vs_not$comparison
 
 # Chik vs not 
 results_chik_vs_not <- train_binary_models(
@@ -105,6 +104,8 @@ results_chik_vs_not <- train_binary_models(
   variables = NULL, 
   metrics = c("ROC", "AUPRC", "Brier"),
 )
+
+results_chik_vs_not$comparison
 
 # Dengue vs chik 
 results_dengue_vs_chik <- train_binary_models(
@@ -134,18 +135,22 @@ results_dengue_serotype <- train_multinomial_models(
   metrics = c("ROC", "AUPRC", "Brier", "StratBrier"))
 
 results_dengue_serotype_neg <-  train_multinomial_models(
-  data = data_with_multinomial_targets,
+  data = data_with_multinomial_targets$data$dengue_serotype_neg,
   target = "dengue_serotype_neg",
   variables = NULL,
   metrics = c("ROC", "AUPRC", "Brier", "StratBrier"))
 
+
+results_dengue_serotype$comparison
+results_dengue_serotype_neg$comparison
+
 # Save results 
-saveRDS(results_flavi_vs_not, 'Results/results_flavi_vs_not.rds')
-saveRDS(results_dengue_vs_not, 'Results/results_dengue_vs_not.rds')
-saveRDS(results_dengue_vs_chik, 'Results/results_dengue_vs_chik.rds')
-saveRDS(results_chik_vs_not, 'Results/results_chik_vs_not.rds')
-saveRDS(results_dengue_serotype, 'Results/results_dengue_serotype.rds')
-saveRDS(results_dengue_serotype_neg, 'Results/results_dengue_serotype_neg.rds')
+saveRDS(results_flavi_vs_not, 'Results/NewClassificationResults/results_flavi_vs_not.rds')
+saveRDS(results_dengue_vs_not, 'Results/NewClassificationResults/results_dengue_vs_not.rds')
+saveRDS(results_dengue_vs_chik, 'Results/NewClassificationResults/results_dengue_vs_chik.rds')
+saveRDS(results_chik_vs_not, 'Results/NewClassificationResults/results_chik_vs_not.rds')
+saveRDS(results_dengue_serotype, 'Results/NewClassificationResults/results_dengue_serotype.rds')
+saveRDS(results_dengue_serotype_neg, 'Results/NewClassificationResults/results_dengue_serotype_neg.rds')
 
 # Micro-average "takes imbalance into account" in the sense that the resulting performance is based on the proportion of every class
 # i.e.the performance of a large class has more impact on the result than of a small class.

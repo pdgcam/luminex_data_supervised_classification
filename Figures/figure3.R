@@ -1,13 +1,11 @@
 library(ggtext)
 
-preprocessed_data_raw <- read.csv('Results/raw_preprocessed_cebu_data.csv')
-View(preprocessed_data_raw)
 ratio_df <- readRDS('Results/ratio_df.rds')
 
 
 pcr_target <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
 
-flavivirus_antigens <- c(
+dengue_zika_antigens <- c(
   "DENV1_DIII", "DENV1_VLP", "DENV1_NS1",
   "DENV2_DIII", "DENV2_VLP", "DENV2_NS1",
   "DENV3_DIII", "DENV3_VLP", "DENV3_NS1",
@@ -18,41 +16,6 @@ flavivirus_antigens <- c(
   "SHERPADES_ZIKV_DIII"
 )
 
-create_custom_bins <- function(data, min_val = 0.75, max_val = 1.25, n_middle_bins = 3) {
- 
-
-  data <- data[!is.na(data)]
-  
-  middle_edges <- seq(min_val, max_val, length.out = n_middle_bins + 1)
-  
-  counts <- c()
-  bin_centers <- c()
-  bin_names <- c()
-  
-  low_count <- sum(data <= min_val)
-  counts <- c(counts, low_count)
-  bin_centers <- c(bin_centers, log2(min_val))
-  bin_names <- c(bin_names, "low")
-  
-  for (i in 1:(length(middle_edges) - 1)) {
-    mask <- (data > middle_edges[i]) & (data <= middle_edges[i + 1])
-    counts <- c(counts, sum(mask))
-    center_val <- (middle_edges[i] + middle_edges[i + 1]) / 2
-    bin_centers <- c(bin_centers, log2(center_val))
-    bin_names <- c(bin_names, paste0("mid_", i))
-  }
-  
-  high_count <- sum(data >= max_val)
-  counts <- c(counts, high_count)
-  bin_centers <- c(bin_centers, log2(max_val))
-  bin_names <- c(bin_names, "high")
-  
-  data.frame(
-    bin = bin_names,
-    count = counts,
-    bin_center = bin_centers
-  )
-}
 
 ratio_plot_data <- function(data, antigen, flavi_targets = pcr_target) {
   
@@ -80,15 +43,15 @@ ratio_plot_data <- function(data, antigen, flavi_targets = pcr_target) {
   }
 
   if (antigen == "SHERPADES") {
-    filtered_antigens <- flavivirus_antigens[str_detect(flavivirus_antigens, "^SHERPADES_.*_DIII$")]
+    filtered_antigens <- dengue_zika_antigens[str_detect(dengue_zika_antigens, "^SHERPADES_.*_DIII$")]
     target_to_col <- setNames(
       sapply(flavi_targets, get_antigen_col, suffix = "SHERPADES"),
       flavi_targets
     )
   } else {
-    filtered_antigens <- flavivirus_antigens[
-      str_detect(flavivirus_antigens, paste0(antigen, "$")) &
-      !str_detect(flavivirus_antigens, "^SHERPADES_")
+    filtered_antigens <- dengue_zika_antigens[
+      str_detect(dengue_zika_antigens, paste0(antigen, "$")) &
+      !str_detect(dengue_zika_antigens, "^SHERPADES_")
     ]
     target_to_col <- setNames(
       sapply(flavi_targets, function(t) get_antigen_col(t, antigen)),
@@ -97,61 +60,51 @@ ratio_plot_data <- function(data, antigen, flavi_targets = pcr_target) {
   }
 
    # Map each pcr_target to its actual column name in filtered_antigens
-
   for (infecting_pathogen in flavi_targets) {
     
     diagonal_data    <- data %>% filter(target == infecting_pathogen)
-    off_diagonal_data <- data %>% filter(target != infecting_pathogen)
     infecting_col  <- target_to_col[[infecting_pathogen]]
     
     for (current_antigen in filtered_antigens) {
       antigen_pathogen <- get_antigen_pathogen(current_antigen)
-      
       if (antigen_pathogen == infecting_pathogen) {
-        # Diagonal
-        ratios     <- diagonal_data[[infecting_col]]
-        ratios     <- ratios[!is.na(ratios)]
-        bins_df    <- create_custom_bins(ratios, 0.75, 1.25, 3)
+        values     <- diagonal_data[[infecting_col]]
+        values     <- values[!is.na(values)]
         panel_type <- "diagonal"
-        
       } else {
-        # Off-diagonal
         non_infecting_col <- current_antigen
-        relative_ratios   <- off_diagonal_data[[non_infecting_col]] / off_diagonal_data[[infecting_col]]
-        relative_ratios   <- relative_ratios[!is.na(relative_ratios)]
-        bins_df           <- create_custom_bins(relative_ratios, 0.75, 1.25, 3)
+        values            <- diagonal_data[[non_infecting_col]] / diagonal_data[[infecting_col]]
+        values            <- values[!is.na(values)]
         panel_type        <- "off_diagonal"
       }
       
-      # Store plot data
-      plot_data_list[[paste(infecting_pathogen, current_antigen, sep = "_")]] <- bins_df %>%
-        mutate(
-          infecting_target = infecting_pathogen,
-          antigen          = current_antigen,
-          panel_type       = panel_type
-        )
-      
-      # Store mean data
+      # Store raw values (no binning)
+      plot_data_list[[paste(infecting_pathogen, current_antigen, sep = "_")]] <- data.frame(
+        value            = values,
+        infecting_target = infecting_pathogen,
+        antigen          = current_antigen,
+        panel_type       = panel_type
+      )
+
+      # Ratio of values above/below 1
+      n_above <- sum(values > 1, na.rm = TRUE)
+      n_below <- sum(values < 1, na.rm = TRUE)
+
       mean_data_list[[paste(infecting_pathogen, current_antigen, sep = "_")]] <- tibble(
         infecting_target = infecting_pathogen,
         antigen          = current_antigen,
         panel_type       = panel_type,
-        x                = mean(if (panel_type == "diagonal") ratios else relative_ratios, na.rm = TRUE),
-        y                = max(bins_df$count),
-        label            = round(x, 2)
+        x                = round((n_above + 0.5) / (n_below + 0.5), 2),
+        label            = round((n_above + 0.5) / (n_below + 0.5), 2)
       )
     }
   }
-  
-  list(
-    plot_data = bind_rows(plot_data_list),
-    mean_data = bind_rows(mean_data_list)
-  )
-}
 
-plot_ratio_grid <- function(data, antigen_suffix, flavi_targets = pcr_target) {
-  
-  plot_inputs <- ratio_plot_data(data, antigen_suffix, flavi_targets)
+  plot_data = bind_rows(plot_data_list)
+  mean_data = bind_rows(mean_data_list)
+  heatmap_data <- mean_data %>%
+    mutate(log_odds = log2(x))
+
   
   antigen_labeller <- as_labeller(function(x) {
   case_when(
@@ -159,62 +112,164 @@ plot_ratio_grid <- function(data, antigen_suffix, flavi_targets = pcr_target) {
     str_detect(x, "^ZIKVAS_")    ~ "ZIKV\nDIII",
     TRUE                         ~ str_replace(x, "_", "\n")
   )
-})
+  })
+  heatmap <- ggplot(heatmap_data, aes(x = antigen, y = infecting_target, fill = log_odds)) +
+    geom_tile(color = "white", linewidth = 0.5) +
+    geom_text(aes(label = round(log_odds, 1)), size = 3.5, fontface = "bold") +
+    scale_fill_gradient2(
+      low      = "#024a9c",
+      mid      = "white",
+      high     = "#e972a7",
+      midpoint = 0,
+      limits   = c(-5, 5),
+      name     = "log2 odds\n(up/down)"
+    ) +
+    scale_x_discrete(labels = function(x) case_when(
+      str_detect(x, "^SHERPADES_") ~ str_replace(x, "^SHERPADES_([^_]+)_DIII$", "SHERPADES\n\\1 DIII"),
+      str_detect(x, "^ZIKVAS_")    ~ "ZIKV\nDIII",
+      TRUE                         ~ str_replace(x, "_", "\n")
+    )) +
+    labs(x = "Antigen", y = "Infecting pathogen") +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x      = element_text(size = 16),
+      axis.text.y      = element_text(size = 16),
+      axis.title       = element_text(size = 16),
+      legend.title     = element_text(size = 16),
+      legend.text      = element_text(size = 16),
+      panel.grid       = element_blank(),
+      plot.background  = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA)
+    )
 
-plot_data <- plot_inputs$plot_data
-  
-  ggplot(plot_data, aes(x = bin_center, y = count, fill = panel_type)) +
-    geom_col(width = 0.4, alpha = 0.8) +
-    # Add vertical line at x=0 (ratio = 1 on log2 scale) for reference
-    geom_vline(xintercept = 0, color = "red", linetype = "dashed", linewidth = 0.5, alpha = 0.8) +
+   p <- ggplot(plot_data, aes(x = value, fill = panel_type)) +
+    geom_histogram(bins = 20, alpha = 0.8) +
+    geom_vline(xintercept = 1, color = "red", linetype = "dashed", linewidth = 0.5, alpha = 0.8) +
     geom_label(
-        data = plot_inputs$mean_data %>% filter(!is.na(label)),
-        aes(x = log2(x), y = y, label = label),
-        x = -Inf,        # left edge of every panel
-        y = Inf,
-        inherit.aes = FALSE,
-        hjust = 0,
-        vjust = 1.3,
-        size = 5,
-        fill = "white",        
-        label.padding = unit(0.15, "lines"),  
-        label.size = 0.3       
-        ) +
+      data         = mean_data %>% filter(!is.na(label)),
+      aes(label    = label),
+      x            = -Inf,
+      y            = Inf,
+      inherit.aes  = FALSE,
+      hjust        = -0.5,
+      vjust        = 2.3,
+      size         = 5,
+      fill         = "white",
+      label.padding = unit(0.15, "lines"),
+      label.size   = 0.3
+    ) +
     facet_grid(
-      rows = vars(infecting_target),
-      cols = vars(antigen),
-      labeller = labeller(antigen = antigen_labeller)) +
+      rows     = vars(infecting_target),
+      cols     = vars(antigen),
+      labeller = labeller(antigen = antigen_labeller)
+    ) +
     scale_fill_manual(
-      values = c(
-        diagonal = "#e972a7",
-        off_diagonal = "#024a9c"
-      )
-    ) + scale_x_continuous( # using log2 scale 
-      limits = c(-2.2, 2.2),
-      breaks = c(-2, -1, 0, 1, 2),
-      labels = c("1/4", "1/2", "1", "2", "4")
+      values = c(diagonal = "#e972a7", off_diagonal = "#024a9c")
+    ) +
+    scale_x_continuous(
+      trans  = "log2",
+      limits = c(1/4, 64),
+      breaks = c(1/4, 1, 4, 16, 64),
+      labels = c("1/4", "1", "4", "16", "64")
     ) +
     theme_minimal(base_size = 10) +
     theme(
-      strip.text.x = element_text(size = 20),
-      strip.text.y = element_text(size = 20),
-      axis.line = element_line(color = "black", linewidth = 0.7),
-      panel.grid = element_blank(),
-      panel.spacing = unit(0.1, "lines"),
-      legend.position = "none",
-      axis.text = element_text(size = 20),
-      axis.text.x = element_text(size = 20, hjust = 0.5),
-      axis.title.x = element_blank(),
-      axis.title.y = element_blank(),
+      strip.text.x     = element_text(size = 20),
+      strip.text.y     = element_text(size = 20),
+      axis.line        = element_line(color = "black", linewidth = 0.7),
+      panel.grid       = element_blank(),
+      panel.spacing    = unit(0.1, "lines"),
+      legend.position  = "none",
+      axis.text        = element_text(size = 20),
+      axis.text.x      = element_text(size = 20, angle = 45, hjust = 1),
+      axis.title.x     = element_blank(),
+      axis.title.y     = element_blank(),
       panel.background = element_rect(fill = "#ffffff", color = NA),
-      plot.background = element_rect(fill = "white", color = NA),
-      axis.ticks.x = element_line(color = "black", size = 0.5),
-      axis.ticks.y = element_line(color = "black", size = 0.5),
-      panel.border = element_rect(color = "black", fill = NA, linewidth = 0.3),
-      aspect.ratio = 1
-
+      plot.background  = element_rect(fill = "white", color = NA),
+      axis.ticks.x     = element_line(color = "black", size = 0.5),
+      axis.ticks.y     = element_line(color = "black", size = 0.5),
+      panel.border     = element_rect(color = "black", fill = NA, linewidth = 0.3),
+      aspect.ratio     = 1
     )
+
+  return(list(
+    plot      = p,
+    plot_data = plot_data,
+    mean_data = mean_data,
+    heatmap   = heatmap
+  ))
 }
+
+
+vlp_ratio_plot <- ratio_plot_data(ratio_df, antigen = "VLP")
+vlp_ratio_plot$plot
+vlp_ratio_plot$heatmap
+head(vlp_ratio_plot$plot_data)
+head(vlp_ratio_plot$mean_data)
+
+
+
+ns1_ratio_plot <- ratio_plot_data(ratio_df, antigen = "NS1")
+ns1_ratio_plot$plot
+
+DIII_ratio_plot <- ratio_plot_data(ratio_df, antigen = "DIII")
+DIII_ratio_plot$plot
+
+sherpades_DIII_ratio_plot <- ratio_plot_data(ratio_df, antigen = "SHERPADES")
+sherpades_DIII_ratio_plot$plot
+
+vlp_ratio_plot
+ns1_ratio_plot
+DIII_ratio_plot
+sherpades_DIII_ratio_plot
+
+# save VLP 
+ggsave("Results/ratio_plot_vlp.png", 
+vlp_ratio_plot$plot, width = 12, height = 8)
+
+ggsave("Results/heatmap_vlp.png", 
+vlp_ratio_plot$heatmap, width = 12, height = 8)
+
+
+# save NS1
+ggsave("Results/ratio_plot_ns1.png", 
+ns1_ratio_plot$plot, width = 12, height = 8)
+
+ggsave("Results/heatmap_ns1.png", 
+ns1_ratio_plot$heatmap, width = 12, height = 8)
+
+
+# save DIII
+ggsave("Results/ratio_plot_DIII.png", 
+DIII_ratio_plot$plot, width = 12, height = 8)
+
+ggsave("Results/heatmap_DIII.png", 
+DIII_ratio_plot$heatmap, width = 12, height = 8)
+
+
+# save SHERPADES DIII
+ggsave("Results/ratio_plot_sherpades_DIII.png", 
+sherpades_DIII_ratio_plot$plot, width = 15, height = 12)
+
+ggsave("Results/heatmap_sherpades_DIII.png",  
+sherpades_DIII_ratio_plot$heatmap, width = 15, height = 12)
+
+
+
+# This function computes summary statistics for ZIKV cross-reactivity ratios
+# across all DENV-infected samples (DENV1-4).
+# For each DENV-infected group, we calculate the ratio:
+#   ZIKV antigen signal / infecting DENV antigen signal
+# This tells us how strongly DENV-infected patients' antibodies
+# cross-react with ZIKV antigen, relative to their own infecting virus.
+# All ratios from DENV1, DENV2, DENV3, and DENV4 infected groups are
+# pooled together, since there is only one ZIKV-infected sample —
+# not enough to compute meaningful within-group statistics.
+# Output: mean, IQR, min/max, and proportion of ratios above/below 1
+#   ratio < 1 → weaker reaction to ZIKV than to infecting DENV serotype
+#   ratio = 1 → equal cross-reactivity
+#   ratio > 1 → stronger reaction to ZIKV than to infecting DENV serotype
+
 
 
 compute_zikv_column_stats <- function(data, antigen_suffix, flavi_targets = pcr_target) {
@@ -272,52 +327,124 @@ compute_zikv_column_stats <- function(data, antigen_suffix, flavi_targets = pcr_
   }
 }
 
-vlp_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "VLP")
-ns1_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "NS1")
-DIII_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "DIII")
-sherpades_DIII_ratio_plot <- plot_ratio_grid(ratio_df, antigen_suffix = "SHERPADES")
-
-vlp_ratio_plot
-ns1_ratio_plot
-DIII_ratio_plot
-sherpades_DIII_ratio_plot
-
-
-
-
-# save VLP 
-ggsave("Results/vlp_ratio_plot.png", 
-vlp_ratio_plot, width = 12, height = 8)
-
-# save NS1
-ggsave("Results/ns1_ratio_plot.png", 
-ns1_ratio_plot, width = 12, height = 8)
-
-# save DIII
-ggsave("Results/DIII_ratio_plot.png", 
-DIII_ratio_plot, width = 12, height = 8)
-
-
-# save SHERPADES DIII
-ggsave("Results/sherpades_DIII_ratio_plot.png", 
-sherpades_DIII_ratio_plot, width = 12, height = 8)
-
-
-
-# This function computes summary statistics for ZIKV cross-reactivity ratios
-# across all DENV-infected samples (DENV1-4).
-# For each DENV-infected group, we calculate the ratio:
-#   ZIKV antigen signal / infecting DENV antigen signal
-# This tells us how strongly DENV-infected patients' antibodies
-# cross-react with ZIKV antigen, relative to their own infecting virus.
-# All ratios from DENV1, DENV2, DENV3, and DENV4 infected groups are
-# pooled together, since there is only one ZIKV-infected sample —
-# not enough to compute meaningful within-group statistics.
-# Output: mean, IQR, min/max, and proportion of ratios above/below 1
-#   ratio < 1 → weaker reaction to ZIKV than to infecting DENV serotype
-#   ratio = 1 → equal cross-reactivity
-#   ratio > 1 → stronger reaction to ZIKV than to infecting DENV serotype
-
 compute_zikv_column_stats(ratio_df, "VLP")
 compute_zikv_column_stats(ratio_df, "NS1")
 compute_zikv_column_stats(ratio_df, "DIII")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# old plot function 
+
+plot_ratio_grid <- function(data, antigen_suffix, flavi_targets = pcr_target) {
+  
+  plot_inputs <- ratio_plot_data(data, antigen_suffix, flavi_targets)
+  
+  antigen_labeller <- as_labeller(function(x) {
+  case_when(
+    str_detect(x, "^SHERPADES_") ~ str_replace(x, "^SHERPADES_([^_]+)_DIII$", "SHERPADES\n\\1\nDIII"),
+    str_detect(x, "^ZIKVAS_")    ~ "ZIKV\nDIII",
+    TRUE                         ~ str_replace(x, "_", "\n")
+  )
+})
+
+plot_data <- plot_inputs$plot_data
+  
+  ggplot(plot_data, aes(x = bin_center, y = count, fill = panel_type)) +
+    geom_col(width = 0.4, alpha = 0.8) +
+    # Add vertical line at x=0 (ratio = 1 on log2 scale) for reference
+    geom_vline(xintercept = 0, color = "red", linetype = "dashed", linewidth = 0.5, alpha = 0.8) +
+    geom_label(
+        data = plot_inputs$mean_data %>% filter(!is.na(label)),
+        aes(x = log2(x), y = y, label = label),
+        x = -Inf,        # left edge of every panel
+        y = Inf,
+        inherit.aes = FALSE,
+        hjust = 0,
+        vjust = 1.3,
+        size = 5,
+        fill = "white",        
+        label.padding = unit(0.15, "lines"),  
+        label.size = 0.3       
+        ) +
+    facet_grid(
+      rows = vars(infecting_target),
+      cols = vars(antigen),
+      labeller = labeller(antigen = antigen_labeller)) +
+    scale_fill_manual(
+      values = c(
+        diagonal = "#e972a7",
+        off_diagonal = "#024a9c"
+      )
+    ) + scale_x_continuous( # using log2 scale 
+      limits = c(-2.2, 2.2),
+      breaks = c(-2, -1, 0, 1, 2),
+      labels = c("1/4", "1/2", "1", "2", "4")
+    ) +
+    theme_minimal(base_size = 10) +
+    theme(
+      strip.text.x = element_text(size = 20),
+      strip.text.y = element_text(size = 20),
+      axis.line = element_line(color = "black", linewidth = 0.7),
+      panel.grid = element_blank(),
+      panel.spacing = unit(0.1, "lines"),
+      legend.position = "none",
+      axis.text = element_text(size = 20),
+      axis.text.x = element_text(size = 20, angle = 45, hjust = 1),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.background = element_rect(fill = "#ffffff", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      axis.ticks.x = element_line(color = "black", size = 0.5),
+      axis.ticks.y = element_line(color = "black", size = 0.5),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 0.3),
+      aspect.ratio = 1
+
+    )
+}
+
+
+create_custom_bins <- function(data, min_val = 0.5, max_val = 16, n_middle_bins = 3) {
+
+  data <- data[!is.na(data)]
+  
+  middle_edges <- seq(min_val, max_val, length.out = n_middle_bins + 1)
+  
+  counts <- c()
+  bin_centers <- c()
+  bin_names <- c()
+  
+  low_count <- sum(data <= min_val)
+  counts <- c(counts, low_count)
+  bin_centers <- c(bin_centers, log2(min_val))
+  bin_names <- c(bin_names, "low")
+  
+  for (i in 1:(length(middle_edges) - 1)) {
+    mask <- (data > middle_edges[i]) & (data <= middle_edges[i + 1])
+    counts <- c(counts, sum(mask))
+    center_val <- (middle_edges[i] + middle_edges[i + 1]) / 2
+    bin_centers <- c(bin_centers, log2(center_val))
+    bin_names <- c(bin_names, paste0("mid_", i))
+  }
+  
+  high_count <- sum(data > max_val)
+  counts <- c(counts, high_count)
+  bin_centers <- c(bin_centers, log2(max_val))
+  bin_names <- c(bin_names, "high")
+  
+  data.frame(
+    bin = bin_names,
+    count = counts,
+    bin_center = bin_centers
+  )
+}

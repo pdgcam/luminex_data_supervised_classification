@@ -99,56 +99,27 @@ train_binary_models <- function(
     verboseIter = FALSE,
     savePredictions = "final")
 
-  # ---- pooled AUC from held-out predictions ---- 
-  # pooled == single AUC computed on all held-out predictions concatenated across folds
-  # more stable than averaging AUCs from each fold (which can be noisy with small test sets)
-  get_pooled_auc <- function(model, model_data, target) {
-    pos_name    <- levels(model_data[[target]])[1]  # "positive"
-    preds       <- model$pred
-    best_tune   <- model$bestTune
-    
-    # Filter to best tuning parameters (glm has no tuning params — just take all)
-    filter_mask <- rep(TRUE, nrow(preds))
-    for (param in names(best_tune)) {
-      if (param %in% names(preds)) {
-        filter_mask <- filter_mask & (preds[[param]] == best_tune[[param]])
-      }
+# mean AUC across all folds
+ average_auc <- function(model, model_data, target) {
+
+    results <- model$results
+    best_tune <- model$bestTune
+    n_resamples <- nrow(model$resample)
+
+    if (length(best_tune) == 0 || ncol(best_tune) == 0) {
+      best_row <- results[1, ]
+    } else {
+      idx <- which(apply(results[, names(best_tune), drop = FALSE], 1,
+                        function(row) all(row == unlist(best_tune))))
+      best_row <- results[if (length(idx) == 0) 1 else idx[1], ]
     }
-    pooled_best <- preds[filter_mask, ]
-    
-    roc_obj <- pROC::roc(
-      response  = pooled_best$obs,
-      predictor = pooled_best[[pos_name]],
-      quiet     = TRUE
-    )
-    ci <- pROC::ci.auc(roc_obj, conf.level = 0.95)
-    list(auc = as.numeric(ci[2]), ci_low = as.numeric(ci[1]), ci_high = as.numeric(ci[3]))
-      # ---- average fold-wise AUC ----
-      fold_aucs <- pooled_best %>%
-        dplyr::group_by(Resample) %>%
-        dplyr::summarise(
-          auc = as.numeric(
-            pROC::auc(
-              response  = obs,
-              predictor = .data[[pos_name]]
-            )
-          ),
-          .groups = "drop"
-        )
-      
-      mean_fold_auc <- mean(fold_aucs$auc, na.rm = TRUE)
-      sd_fold_auc   <- sd(fold_aucs$auc, na.rm = TRUE)
-      
-      list(
-        auc           = as.numeric(ci[2]),   
-        pooled_auc    = as.numeric(ci[2]),
-        ci_low        = as.numeric(ci[1]),
-        ci_high       = as.numeric(ci[3]),
-        mean_fold_auc = mean_fold_auc,
-        sd_fold_auc   = sd_fold_auc,
-        fold_aucs     = fold_aucs
-      )
+
+    auc    <- best_row$ROC
+    se <- best_row$ROCSD / sqrt(n_resamples)
+
+    list(auc = auc, sd = best_row$ROCSD, ci_low = best_row$ROC - 1.96 * se, ci_high = best_row$ROC + 1.96 * se)
   }
+
   
   # ---- Train Models ----
 
@@ -234,24 +205,24 @@ train_binary_models <- function(
   )
 
   # ---- Compute Pooled AUCs ----
-  pooled_aucs <- list()
+  aucs <- list()
   
   #GLM AUC
     if (univariate || n_predictors == 1) {
-    pooled_aucs$glm <- get_pooled_auc(glm_model, model_data, target)
+    aucs$glm <- average_auc(glm_model, model_data, target)
   } else {
-    pooled_aucs$glmnet <- get_pooled_auc(glm_model, model_data, target)
+    aucs$glmnet <- average_auc(glm_model, model_data, target)
+    
   }
   # RF or Tree AUC
   if (univariate || n_predictors == 1) {
-    pooled_aucs$tree <- get_pooled_auc(tree_model, model_data, target)
+    aucs$tree <- average_auc(tree_model, model_data, target)
   } else {
-    pooled_aucs$rf <- get_pooled_auc(rf_model, model_data, target)
+    aucs$rf <- average_auc(rf_model, model_data, target)
   }
   # SVM AUC
-  pooled_aucs$svm <- get_pooled_auc(svm_model, model_data, target)
+  aucs$svm <- average_auc(svm_model, model_data, target)
 
-  # ---- Extract Predictions ----
 
   # ---- Build Model List + Names ----
   if (univariate || n_predictors == 1) {
@@ -301,9 +272,9 @@ all_predictions <- bind_rows(
   # ---- Compile Metrics using Pooled AUC ----
   comparison_df <- data.frame(
     Model     = display_names,
-    ROC       = sapply(model_names, function(m) pooled_aucs[[m]]$auc),
-    ROC_low   = sapply(model_names, function(m) pooled_aucs[[m]]$ci_low),
-    ROC_high  = sapply(model_names, function(m) pooled_aucs[[m]]$ci_high)
+    ROC       = sapply(model_names, function(m) aucs[[m]]$auc),
+    ROC_low   = sapply(model_names, function(m) aucs[[m]]$ci_low),
+    ROC_high  = sapply(model_names, function(m) aucs[[m]]$ci_high)
   )
   
   # Calculate other metrics from model results
@@ -328,7 +299,7 @@ all_predictions <- bind_rows(
     models         = model_list,
     predictions    = all_predictions,
     comparison     = comparison_df,
-    pooled_aucs    = pooled_aucs,
+    aucs           = aucs,
     variables_used = variables,
     target_used    = target,
     target_levels  = target_levels, 
