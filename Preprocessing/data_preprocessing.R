@@ -106,22 +106,16 @@ prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pr
 }
 
 
-
 # validation and random datasets (cebu)
 # validation subset = PCR confirmed cases
-validation_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/MIA_DataBaseOut_ValidationSet.csv")
-random_subset <- read.csv("/Users/ap2488/Desktop/supervised_learning_flavi/MIA_DataBaseOut_RandomSubset.csv")
-cebu_mutiple_antigens <- read_excel("/Users/ap2488/Desktop/supervised_learning_flavi/db_philippines_IgG_IgA_IgM_avidity.xlsx")
-
-View(cebu_mutiple_antigens)
-
+validation_subset <- read.csv(here("Data/MIA_DataBaseOut_ValidationSet.csv"))
+random_subset <- read.csv(here("Data/MIA_DataBaseOut_RandomSubset.csv"))
+cebu_mutiple_antigens <- read_excel(here("Data/db_philippines_IgG_IgA_IgM_avidity.xlsx"))
 
 
 # align patient IDs / PCR cols across datasets
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
-
-
 
 
 # pivot to get RAU as main data
@@ -130,7 +124,6 @@ cebu_pivot <- cebu_mutiple_antigens %>%
     names_from = antigen,
     values_from = RAU
   )
-
 # --- Add col: days_since_infection 
 cebu_pivot_days_since_inf  <- cebu_pivot %>%
   group_by(id_patient) %>%
@@ -145,8 +138,15 @@ cebu_pivot_days_since_inf  <- cebu_pivot %>%
   ) %>%
   ungroup()
 
+View(cebu_pivot_days_since_inf)
+nrow(cebu_pivot_days_since_inf)
+unique(cebu_pivot_days_since_inf$days_since_infection)
+length(unique(cebu_pivot_days_since_inf$id_patient))
+
+
 
 # --- Use HI threshold (1.6) to remove subclinical infection 
+# convert HAI to numeric --> <10 --> 5, NA --> NA
 # use HI to informed if pcr neg == no infection 
 HI_ratio_df <- cebu_pivot_days_since_inf %>%
   mutate(across(starts_with("HAI_"), convert_hai_to_numeric)) %>%
@@ -180,43 +180,86 @@ HI_ratio_df <- cebu_pivot_days_since_inf %>%
   ) %>%
   ungroup()  %>% dplyr::select(-prev_days_since_infection, -time_diff)
 
+quartz()
+HI_ratio_df %>%
+  arrange(id_patient, days_since_infection) %>%
+  mutate(mean_log_HI_f = factor(mean_log_HI, levels = sort(unique(mean_log_HI)))) %>%
+  ggplot(aes(x = days_since_infection, y = reorder(id_patient, desc(id_patient)))) +
+  geom_line(aes(group = id_patient), colour = "grey70", linewidth = 0.4) +
+  geom_point(aes(colour = mean_log_HI_f), size = 3) +
+  scale_colour_viridis_d(name = "Mean log HI", option = "plasma", direction = 1) +
+  labs(
+    x = "Days since infection",
+    y = "Patient ID",
+    title = "Sampling timepoints per patient",
+    subtitle = "Colour = mean log HI titre"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.major.y = element_line(colour = "grey92"),
+    panel.grid.minor = element_blank(),
+    legend.key.size = unit(0.5, "lines")
+  )
+
+
 
 
 # use ratio threshold == 1.6
-HI_ratio_df <- HI_ratio_df %>%
+HI_ratio_df_censored <- HI_ratio_df %>%
   group_by(id_patient) %>%
+  filter(
+    !any(!is.na(PCR) & PCR != "negative") | days_since_infection < 0
+  ) %>%
   mutate(
-    # Check if patient was EVER PCR positive
-    ever_pcr_positive = any(!is.na(PCR) & PCR != "negative"),
-    
     infection_status = case_when(
-      # check subclinical infection (regardless of PCR)
-      log_mean_HI_ratio_deng >= log2(1.6) &  log_mean_HI_ratio_chik >= log2(1.6) ~ 'subclinical_deng_chik',
-      log_mean_HI_ratio_deng >= log2(1.6) ~ 'subclinical_dengue',
-      log_mean_HI_ratio_chik >= log2(1.6) ~ 'subclinical_chik',
-      # Then check if ever PCR positive (without subclinical HI rise)
-      ever_pcr_positive ~ 'true_positive',
-      # Remaining PCR-negative patients with no HI rise
-      log_mean_HI_ratio_deng < log2(1.6) & log_mean_HI_ratio_chik < log2(1.6) ~ 'true_negative',
-      # Handle NAs (first timepoint, missing HI data)
+      # 1. subclinical FIRST (highest priority)
+      log_mean_HI_ratio_deng >= log2(1.6) & log_mean_HI_ratio_chik >= log2(1.6) ~ 'subclinical_deng_chik',
+      log_mean_HI_ratio_deng >= log2(1.6)                                         ~ 'subclinical_dengue',
+      log_mean_HI_ratio_chik >= log2(1.6)                                         ~ 'subclinical_chik',
+      # 2. true negative (pre-PCR samples that never crossed threshold)
+      (is.na(log_mean_HI_ratio_deng) | log_mean_HI_ratio_deng < log2(1.6)) &
+      (is.na(log_mean_HI_ratio_chik) | log_mean_HI_ratio_chik < log2(1.6))        ~ 'true_negative',
+      # 3. catch-all
       TRUE ~ NA_character_
     )
-  ) %>% ungroup() %>% dplyr::select(-ever_pcr_positive)
+  ) %>%
+  ungroup()
 
+View(HI_ratio_df %>% count(id_patient) )
+View(HI_ratio_df_censored)
 
-table(HI_ratio_df$infection_status)
 
 # drop rows (timepoints) that are suspected to be subclinical using the 1.6 threshold 
 clean_HI_ratio_df <- HI_ratio_df %>%
+  left_join(
+    HI_ratio_df_censored %>% 
+      distinct(id_patient, id_sample, infection_status),
+    by = c("id_patient", "id_sample")
+  ) %>%
   filter(!grepl("subclinical", infection_status) | is.na(infection_status))
 
+# check for duplicate combos in the censored df
+# check if distinct worked - should all be 1
+HI_ratio_df_censored %>% 
+  distinct(id_patient, id_sample, infection_status) %>%
+  count(id_patient, id_sample) %>%
+  filter(n > 1)
+
+HI_ratio_df_censored %>%
+  filter(id_sample %in% c("CPC_C_0068_00_Y03_S03_B_003", "CPC_C_0876_00_Y02_S02_B_002")) %>%
+  distinct(id_patient, id_sample, infection_status)
+
+
 nrow(clean_HI_ratio_df)
-nrow(HI_ratio_df)
+nrow(HI_ratio_df_censored)
 
 # Identify patient IDs that were excluded 
-excluded_rows <- HI_ratio_df %>%
+excluded_rows <- HI_ratio_df_censored %>%
   filter(grepl("subclinical", infection_status))
-View(excluded_rows)
+
+nrow(excluded_rows)
+
+
 
 
 
@@ -239,10 +282,11 @@ antigen_cols <- c(
 isotypes <- c("IgG", "IgA", "IgM", "avidity")
 
 
-
 # rename + IgG, IgA and IgM isotypes
 final_preprocessed_data <- clean_HI_ratio_df
 final_preprocessed_data <- final_preprocessed_data %>% filter(isotype %in% isotypes)
+
+View(final_preprocessed_data)
 
 # keep unlogged data 
 final_preprocessed_data_raw <- final_preprocessed_data
@@ -317,3 +361,55 @@ saveRDS(processed_dfs$ratio,"Results/ratio_df.rds")
 saveRDS(logged_ratio_df, "Results/logged_ratio_df.rds")
 saveRDS(processed_dfs$cross_sectional_data, "Results/cross_sectional_df.rds")
 
+
+
+
+
+
+# --- Stricter "negative" cut off: ratio (T2/T1) < 1 --> remove sample 
+View(cebu_pivot_days_since_inf)
+colnames(cebu_pivot_days_since_inf)
+
+
+flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
+"DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
+"DENV3_DIII","DENV3_NS1","DENV3_VLP", "SHERPADES_DENV3_DIII",
+"DENV4_DIII","DENV4_NS1","DENV4_VLP", "SHERPADES_DENV4_DIII",
+"JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII",
+"YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII",
+"WNV_DIII","WNV_NS1","SHERPADES_WNV_DIII",
+"ZIKV_NS1","ZIKV_VLP","ZIKVAS_DIII","ZIKVSU_NS1","SHERPADES_ZIKV_DIII")
+
+alpha_antigens <- c("CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP", "SHERPADES_CHIKV_E2", 
+                    "MAYV_E2" , "SHERPADES_MAYV_E2",
+                    "ONNV_E2", "ONNV_VLP",
+                    "RR" , "SHERPADES_RR")
+     
+
+
+all_antigens <- c(flavi_antigens, alpha_antigens)
+
+ratio_cols <- paste0(all_antigens, "_ratio")
+
+T2_T1_ratio_df <- cebu_pivot_days_since_inf %>%
+  arrange(id_patient, days_since_infection) %>%
+  group_by(id_patient) %>%
+  mutate(
+    across(
+      all_of(all_antigens),
+      ~ .x / lag(.x),
+      .names = "{.col}_ratio"
+    )
+  ) %>%
+  ungroup() %>%
+  filter(
+    # keep NAs (first timepoint per patient) and rows where ALL ratios <= 1
+    if_all(all_of(ratio_cols), ~ is.na(.x) | .x <= 1)
+  )
+
+nrow(T2_T1_ratio_df)
+nrow(cebu_pivot_days_since_inf)
+
+
+View(cebu_pivot_days_since_inf %>%
+  group_by(id_patient))

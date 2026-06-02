@@ -124,11 +124,14 @@ ratio_plot_data <- function(data, antigen, flavi_targets = pcr_target) {
       limits   = c(-5, 5),
       name     = "log2 odds\n(up/down)"
     ) +
-    scale_x_discrete(labels = function(x) case_when(
+    scale_x_discrete(
+      position = "top",
+      labels = function(x) case_when(
       str_detect(x, "^SHERPADES_") ~ str_replace(x, "^SHERPADES_([^_]+)_DIII$", "SHERPADES\n\\1 DIII"),
       str_detect(x, "^ZIKVAS_")    ~ "ZIKV\nDIII",
       TRUE                         ~ str_replace(x, "_", "\n")
-    )) +
+    )) + 
+    scale_y_discrete(limits = rev) +
     labs(x = "Antigen", y = "Infecting pathogen") +
     theme_minimal(base_size = 12) +
     theme(
@@ -172,16 +175,16 @@ ratio_plot_data <- function(data, antigen, flavi_targets = pcr_target) {
       breaks = c(1/4, 1, 4, 16, 64),
       labels = c("1/4", "1", "4", "16", "64")
     ) +
-    theme_minimal(base_size = 10) +
+    theme_minimal() +
     theme(
       strip.text.x     = element_text(size = 20),
       strip.text.y     = element_text(size = 20),
       axis.line        = element_line(color = "black", linewidth = 0.7),
       panel.grid       = element_blank(),
-      panel.spacing    = unit(0.1, "lines"),
+      panel.spacing    = unit(0.01, "lines"),
       legend.position  = "none",
       axis.text        = element_text(size = 20),
-      axis.text.x      = element_text(size = 20, angle = 45, hjust = 1),
+      axis.text.x      = element_text(size = 20),
       axis.title.x     = element_blank(),
       axis.title.y     = element_blank(),
       panel.background = element_rect(fill = "#ffffff", color = NA),
@@ -202,6 +205,7 @@ ratio_plot_data <- function(data, antigen, flavi_targets = pcr_target) {
 
 
 vlp_ratio_plot <- ratio_plot_data(ratio_df, antigen = "VLP")
+quartz()
 vlp_ratio_plot$plot
 vlp_ratio_plot$heatmap
 head(vlp_ratio_plot$plot_data)

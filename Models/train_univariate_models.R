@@ -1,6 +1,7 @@
 # --- Source functions
 source(here('Models/train_binary_models.R'))
 source(here('Models/train_multinomial_models.R'))
+source(here('Functions.R'))
 
 # function for univariate analysis across multiple targets
 train_multiple_targets_univariate <- function(
@@ -131,6 +132,7 @@ train_multiple_targets_univariate <- function(
       ))
     
 }
+
 
 
 serotype_variables_flavi <- grep("DENV|ZIKV", names(ratio_df), value = TRUE)
@@ -414,3 +416,97 @@ print(univariate_plot_dengue_serotype)
 
 ggsave("Results/NEW_univariate_plot_dengue_serotype.png",
        univariate_plot_dengue_serotype, width = 20, height = 10, dpi = 300)
+
+
+
+
+# Forward Selection - univariate models
+forward_stepwise_selection <- function(
+    univariate_results,   # output from train_multiple_targets_univariate
+    data_list,
+    positive_class_map = list(),
+    metrics = c("ROC")) {
+  
+  all_stepwise <- list()
+  
+  for (target_name in names(univariate_results$results_by_target)) {
+    cat("Forward selection for target:", target_name, "\n")
+    
+    current_data <- data_list[[target_name]]
+    pos_class    <- positive_class_map[[target_name]]
+    
+    # ---- Rank variables by univariate AUC (best first) ----
+    target_comparisons <- univariate_results$combined_comparison %>%
+      filter(target == target_name) %>%
+      arrange(desc(ROC))
+    
+    ranked_vars <- target_comparisons$variable
+    
+    # ---- Greedy forward steps ----
+    selected  <- c()
+    step_aucs <- c()
+    
+    for (var in ranked_vars) {
+      selected <- c(selected, var)
+      cat(sprintf("  Step %d: %s\n", length(selected), paste(selected, collapse = " + ")))
+      
+      result <- train_binary_models(
+        data          = current_data,
+        target        = target_name,
+        variables     = selected,
+        positive_class = pos_class,
+        metrics       = metrics
+      )
+      
+      # Pull GLM AUC (most stable for stepwise)
+      auc_key  <- if (length(selected) == 1) "glm" else "glmnet"
+      step_auc <- result$pooled_aucs[[auc_key]]$auc
+      step_aucs <- c(step_aucs, step_auc)
+    }
+    
+    # ---- Compile results ----
+    all_stepwise[[target_name]] <- data.frame(
+      step     = seq_along(ranked_vars),
+      variable = ranked_vars,
+      AUC      = step_aucs,
+      gain     = c(NA, diff(step_aucs))
+    )
+  }
+  
+  return(all_stepwise)
+}
+
+plot_stepwise_results <- function(stepwise_results) {
+  
+  library(ggplot2)
+  
+  # Combine all targets into one df
+  combined <- dplyr::bind_rows(
+    lapply(names(stepwise_results), function(t) {
+      stepwise_results[[t]]$target <- t
+      stepwise_results[[t]]
+    })
+  )
+  
+  ggplot(combined, aes(x = step, y = AUC)) +
+    geom_line(colour = "steelblue", linewidth = 0.8) +
+    geom_point(colour = "steelblue", size = 2.5) +
+    geom_text(aes(label = variable), angle = 30, hjust = 0, vjust = -0.8, size = 2.8) +
+    scale_x_continuous(breaks = seq_len(max(combined$step))) +
+    scale_y_continuous(limits = c(NA, 1.05)) +
+    facet_wrap(~ target, scales = "free_x") +
+    labs(x = "Step", y = "AUC", title = "Forward stepwise selection") +
+    theme_minimal()
+}
+
+stepwise_results <- forward_stepwise_selection(
+  univariate_results = univariate_results_flavi,
+  data_list          = data_with_binomial_targets$data,
+   positive_class_map = list(flavi = "positive", 
+                            dengue = "positive") 
+)
+
+plot_stepwise_results(stepwise_results)
+
+
+names(univariate_results_flavi)

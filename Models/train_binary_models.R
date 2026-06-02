@@ -91,9 +91,8 @@ train_binary_models <- function(
   }
   
   binary_control <- caret::trainControl(
-    method = "repeatedcv",
+    method = "cv",
     number = 5,
-    repeats = 20,
     summaryFunction = combinedBinary,
     classProbs = TRUE,
     verboseIter = FALSE,

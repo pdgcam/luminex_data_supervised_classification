@@ -1,7 +1,7 @@
 
 # Data files
-data/*.csv
-data/*.xlsx
+Data/*.csv
+Data/*.xlsx
 
 # Large result files
 Results/*.rds
