@@ -2,6 +2,7 @@
 # Data files
 Data/*.csv
 Data/*.xlsx
+Data/*.rds
 
 # Large result files
 Results/*.rds
