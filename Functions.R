@@ -1,83 +1,244 @@
-# ---- Function for Supervised Classification ----
+# NEW FUNCTIONS
+   
+# Functions to select targets / classification questions 
+select_targets <- function(preprocessed_data,
+                           targets = c("flavi", "dengue", 
+                                       "zika", "chik",
+                                       "dengue_zika",  "dengue_chik",
+                                       "dengue_serotype", "dengue_serotype_neg"), 
+                                       drop_original_target = TRUE,  min_samples = 2) {
+  
+  if (!"target" %in% names(preprocessed_data)) {
+    stop('Column "Target" not found in preprocessed_data.')
+  }
+  
+  # Validate all targets
+  valid_targets <- c("flavi", "dengue", 
+                     "zika", "chik",
+                     "dengue_zika", 
+                     "dengue_serotype", "dengue_serotype_neg",
+                     "dengue_chik")
+  
+  invalid <- setdiff(targets, valid_targets)
+  if (length(invalid) > 0) {
+    stop("Invalid target(s): ", paste(invalid, collapse = ", "))
+  }
+  
+  # mappings
+  mapping_list <- list(
+    flavi               = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 1),
+    dengue              = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1),
+    zika                = c(ZIKV = 1),
+    chik                = c(CHIKV = 1),
+    dengue_zika         = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, ZIKV = 2),
+    dengue_serotype     = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
+    dengue_serotype_neg = c(DENV1 = 1, DENV2 = 2, DENV3 = 3, DENV4 = 4),
+    dengue_chik        = c(DENV1 = 1, DENV2 = 1, DENV3 = 1, DENV4 = 1, CHIKV = 2))
+  
+  # factor levels/labels
+  label_specs <- list(
+    flavi               = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    dengue              = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    zika                = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    chik                = list(levels = c(0, 1),           labels = c("negative", "positive")),
+    dengue_zika         = list(levels = c(0, 1, 2),        labels = c("negative", "dengue", "zika")),
+    dengue_serotype     = list(levels = c(1, 2, 3, 4),     labels = c("DENV1", "DENV2", "DENV3", "DENV4")),
+    dengue_serotype_neg = list(levels = c(0, 1, 2, 3, 4),  labels = c("negative", "DENV1", "DENV2", "DENV3", "DENV4")),
+    dengue_chik         = list(levels = c(1, 2),           labels = c("dengue", "CHIKV"))
+  )
 
-# ---- Preprocess data ----
-process_luminex_data <- function(raw_data, patient_mapping, pre_threshold = -1) {
+  positive_class_map <- list(
+  flavi       = "positive",
+  dengue      = "positive",
+  zika        = "positive",
+  chik        = "positive",
+  dengue_zika = "dengue",
+  dengue_chik = "dengue"
+)
   
-  # Define metadata columns
-  META_COLS <- c('id_patient', 'date_sample', 'PCR', 'days_since_infection', 'Target',
-                 "HAI_DENV1" , "HAI_DENV2", "HAI_DENV3","HAI_DENV4" )
   
-  # Label timepoints based on threshold
-  processing_df <- raw_data %>%
-    mutate(timepoint = ifelse(days_since_infection <= pre_threshold, 'pre', 'post'))
+  # List to store results
+  data_with_target <- list()
   
-  # Identify antigen columns, exclude metadata
-  antigen_cols <- setdiff(names(processing_df), c(META_COLS, 'timepoint'))
-  
-  # Dataset 1: Post/pre  Ratio
-  grouped_means <- processing_df %>%
-    group_by(id_patient, timepoint) %>%
-    summarise(across(all_of(antigen_cols), ~mean(.x, na.rm = TRUE)), .groups = 'drop')
-  
-  averages_pivot <- grouped_means %>%
-    pivot_wider(
-      names_from = timepoint,
-      values_from = all_of(antigen_cols),
-      names_glue = "{.value}_{timepoint}"
+  # Process each target
+  for (target in targets) {
+    df_copy <- preprocessed_data
+    
+    # Build the chosen target column
+    mp <- mapping_list[[target]]
+    tgt_chr <- as.character(df_copy$target)
+    
+   # Map positives, everything else is negative (0)
+    df_copy[[target]] <- ifelse(
+      tgt_chr %in% names(mp),
+      as.numeric(dplyr::recode(tgt_chr, !!!mp, .default = NA_real_)),
+      0
     )
-  
-  post_cols <- grep("_post$", names(averages_pivot), value = TRUE)
-  pre_cols <- grep("_pre$", names(averages_pivot), value = TRUE)
-  base_names <- sub("_post$", "", post_cols)
-  
-  post <- averages_pivot %>%
-    dplyr::select(all_of(post_cols)) %>%
-    as.data.frame()
-  names(post) <- base_names
-  rownames(post) <- averages_pivot$id_patient
-  
-  pre <- averages_pivot %>%
-    dplyr::select(all_of(pre_cols)) %>%
-    as.data.frame()
-  names(pre) <- base_names
-  rownames(pre) <- averages_pivot$id_patient
-  ratio_df <- (post / pre) %>%
-    na.omit()
+    
+    # Remove negatives for classifications that only include infected samples (eg: given infection, classify dengue vs chik)
+    if (target %in% c("dengue_chik", "dengue_serotype")) {
+      df_copy <- df_copy[df_copy[[target]] %in% c(1, 2, 3, 4), ]  # keep only mapped positives
+    }
+    # convert to factor with labels
+    spec <- label_specs[[target]]
+    df_copy[[target]] <-
+      factor(df_copy[[target]], 
+             levels = spec$levels, 
+             labels = spec$labels)
 
-  # add target using the patient mapping
-  ratio_df$Target <- patient_mapping$mapped_target[match(rownames(ratio_df), patient_mapping$id_patient)]
-  
-  # Dataset 2: Last draw (ie draw at max days since infection)
-  cross_sectional_data <- raw_data %>%
-    group_by(id_patient) %>%
-    filter(days_since_infection == max(days_since_infection, na.rm = TRUE)) %>%
-    ungroup()
-  cross_sectional_data  <- cross_sectional_data  |> as.data.frame()
-  rownames(cross_sectional_data) <- cross_sectional_data$id_patient
-  # Keep patient ID, Target, and antigen columns
-  cross_sectional_data$Target <- patient_mapping$mapped_target[match(rownames(cross_sectional_data), patient_mapping$id_patient)]
-
-
-  # Remove metadata columns not required for further analysis
-  cross_sectional_data$days_since_infection  <- NULL
-  cross_sectional_data$id_patient <- NULL
-  cross_sectional_data$HAI_DENV1 <- NULL
-  cross_sectional_data$HAI_DENV2 <- NULL
-  cross_sectional_data$HAI_DENV3 <- NULL
-  cross_sectional_data$HAI_DENV4 <- NULL
-  
- 
-  # Return all three datasets as a list
+    # Drop classes with fewer than min_samples
+    class_counts <- table(df_copy[[target]])
+    valid_classes <- names(class_counts[class_counts >= min_samples])
+    
+    if (length(valid_classes) < length(class_counts)) {
+      dropped <- names(class_counts[class_counts < min_samples])
+      cat(sprintf("Target '%s': dropping class(es) with < %d samples: %s\n",
+                  target, min_samples, paste(dropped, collapse = ", ")))
+      df_copy <- df_copy[df_copy[[target]] %in% valid_classes, ]
+      df_copy[[target]] <- droplevels(df_copy[[target]])  # remove unused factor levels
+    }
+    
+    
+    # drop original Target column if requested
+    if (drop_original_target) {
+      if ("target" %in% names(df_copy)) {
+        df_copy[["target"]] <- NULL
+      }
+    }
+    
+    data_with_target[[target]] <- df_copy
+  }
   return(list(
-    ratio = ratio_df,
-    cross_sectional_data = cross_sectional_data
+  data = data_with_target,
+  positive_class_map = positive_class_map
+))
+}
+
+
+
+# Function to run binomial and multinomial classification with multiple targets simulatensouly 
+train_multiple_targets <- function(
+    data_list,  
+    variables = NULL,
+    positive_class_map = list(),
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
+  
+  # Store all results
+  all_results <- list()
+  all_comparisons <- list()
+  all_predictions <- list()
+  
+  # Loop through each target dataset
+  for (target_name in names(data_list)) {
+    cat("Processing target:", target_name, "\n")
+    
+    current_data <- data_list[[target_name]]
+    target_col <- paste0(target_name)
+    
+    # Check if target column exists
+    if (!target_col %in% names(current_data)) {
+      warning(paste("Target column", target_col, "not found in", target_name, "data. Skipping."))
+      next
+    }
+    
+    # Determine class type based on target variable
+    target_values <- unique(current_data[[target_col]])
+    n_classes <- length(target_values)
+    print(n_classes)
+
+    if (n_classes == 2) {
+
+      pos_class <- positive_class_map[[target_name]]
+  
+      # Train models for this target
+      result <- train_binary_models(
+        data = current_data,
+        target = target_col,
+        variables = variables,
+        positive_class = pos_class,
+        metrics = metrics
+      )
+      
+      # Store results
+      all_results[[target_name]] <- result
+      
+      # Add target name to comparison dataframe
+      comparison_with_target <- result$comparison
+      comparison_with_target$target <- target_name
+      all_comparisons[[target_name]] <- comparison_with_target
+      
+      # Add target name to predictions dataframe
+      predictions_with_target <- result$predictions
+      predictions_with_target$target <- target_name
+      all_predictions[[target_name]] <- predictions_with_target
+    }
+    
+    else if (n_classes > 2){
+      # Train models for this target
+      result <- train_multinomial_models(
+        data = current_data,
+        target = target_col,
+        variables = variables,
+        metrics = metrics
+      )
+      
+      # Store results
+      all_results[[target_name]] <- result
+      
+      # Add target name to comparison dataframe
+      comparison_with_target <- result$comparison
+      comparison_with_target$target <- target_name
+      all_comparisons[[target_name]] <- comparison_with_target
+      
+      # Add target name to predictions dataframe
+      predictions_with_target <- result$predictions
+      predictions_with_target$target <- target_name
+      all_predictions[[target_name]] <- predictions_with_target
+    }
+    
+    else {
+      warning(paste("Target", target_col, "has only 1 class. Skipping."))
+      next
+    }
+  }
+  
+  # Combine all comparison dataframes
+  combined_comparison <- do.call(rbind, all_comparisons)
+  rownames(combined_comparison) <- NULL
+  # Reorder columns to put Target first
+  col_order <- c("target", setdiff(names(combined_comparison), "target"))
+  combined_comparison <- combined_comparison[, col_order]
+  
+  # Combine all predictions dataframes
+  combined_predictions <- dplyr::bind_rows(all_predictions)
+  rownames(combined_predictions) <- NULL
+  # Reorder columns to put Target first
+  pred_col_order <- c("target", setdiff(names(combined_predictions), "target"))
+  combined_predictions <- combined_predictions[, pred_col_order]
+  
+  return(list(
+    results_by_target = all_results,
+    combined_comparison = combined_comparison,
+    combined_predictions = combined_predictions,
+    summary = list(
+      n_targets = length(all_results),
+      target_names = names(all_results),
+      metrics = metrics
+    )
   ))
 }
 
 
 
+
+
+
+
+
+# --- OLD SUPERVISED CLASSIFICATION FUNCTIONS ---
+
 # ---- Select targets / classification questions ----
-select_targets <- function(preprocessed_data,
+select_targets_old <- function(preprocessed_data,
                            targets = c("flavi", "dengue", 
                                        "zika", "dengue_zika", 
                                        "dengue_serotype", "dengue_serotype_neg",
@@ -167,7 +328,7 @@ select_targets <- function(preprocessed_data,
 
 
 # ---- Binary analysis ----
-train_binary_models <- function(
+train_binary_models_old <- function(
     data,
     target,
     variables = NULL,
@@ -419,7 +580,7 @@ train_binary_models <- function(
 
   
 # ---- Multinomial analysis ----
-train_multinomial_models <- function(
+train_multinomial_models_old <- function(
     data,
     target,
     variables = NULL,
@@ -504,7 +665,7 @@ train_multinomial_models <- function(
     
     # One-vs-Rest metrics for each class
     auc_per_class   <- numeric(length(lev))  
-    auprc_per_class <- numeric(length(lev))  lev
+    auprc_per_class <- numeric(length(lev)) 
     
     # micro-averaging AUC/AUPRC
     all_y_binary <- c()
@@ -730,7 +891,7 @@ train_multinomial_models <- function(
   
 
 # ---- Train with multiple targets simultaneously ----
-train_multiple_targets <- function(
+train_multiple_targets_old <- function(
     data_list,  
     variables = NULL,
     k_fold = 5,
@@ -843,7 +1004,7 @@ train_multiple_targets <- function(
                             
 
 # ---- Univariate nalysis ----
-train_multiple_targets_univariate <- function(
+train_multiple_targets_univariate_old <- function(
     data_list,  
     variables = NULL,  # Vector of variable names to test one by one
     k_fold = 5,
@@ -997,4 +1158,5 @@ train_multiple_targets_univariate <- function(
     )
   ))
 }
+
 

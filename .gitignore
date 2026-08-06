@@ -1,0 +1,15 @@
+
+# Data files
+Data/*.csv
+Data/*.xlsx
+Data/*.rds
+
+# Large result files
+Results/*.rds
+Results/*.csv
+.DS_Store
+
+# R session
+.Rhistory
+.RData
+.Rproj.user/
