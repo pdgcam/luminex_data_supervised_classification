@@ -230,7 +230,7 @@ for (infecting_pathogen in flavi_targets) {
     conf_level   = conf_level
   )
 }
- 
+
 
 # ---- Plots 
 plot_ratio_histogram <- function(res,
@@ -303,9 +303,6 @@ plot_ratio_histogram <- function(res,
     )
 }
 
-
- 
-# ---- 5. Forest plot ----------------------------------------------------------
 plot_ratio_forest <- function(res,
                               pad = 0.5,
                               max_breaks = 8) {
@@ -315,8 +312,8 @@ plot_ratio_forest <- function(res,
   forest_data <- res$forest_data
   conf_level  <- if (is.null(res$conf_level)) 0.95 else res$conf_level
 
-  facet_rows <- vars(antigen_label)
-  y_var      <- "target_label"
+  facet_rows <- vars(target_label)     # <-- changed: facet by infecting pathogen
+  y_var      <- "antigen_label"        # <-- changed: y-axis = antigen tested
 
   off_diag <- forest_data %>% dplyr::filter(panel_type == "off_diagonal")
 
@@ -366,6 +363,8 @@ plot_ratio_forest <- function(res,
 
 antigen_types <- c("VLP", "NS1", "DIII", "SHERPADES")
 
+
+
 ratio_dfs <- list(
   IgG     = ratio_df_IgG,
   IgA     = ratio_df_IgA,
@@ -405,12 +404,6 @@ for (iso in names(ratio_dfs)) {
            width = 13, height = 16, units = "in", limitsize = FALSE)
   }
 }
-
-
-
-
-
-
 
 
 

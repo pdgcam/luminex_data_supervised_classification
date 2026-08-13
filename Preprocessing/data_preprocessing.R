@@ -398,6 +398,18 @@ saveRDS(preprocessed_by_isotype, "Data/by_isotype/preprocessed_by_isotype.rds")
  
 
 igg_ratio <- readRDS("Data/by_isotype/ratio_df_IgG.rds")
+
+
 logged_preprocessed_cebu_IgG <- read.csv("Data/by_isotype/logged_preprocessed_cebu_IgG.csv")
+logged_preprocessed_cebu_IgA <- read.csv("Data/by_isotype/logged_preprocessed_cebu_IgA.csv")
+logged_preprocessed_cebu_IgM <- read.csv("Data/by_isotype/logged_preprocessed_cebu_IgM.csv")
+logged_preprocessed_cebu_avidity <- read.csv("Data/by_isotype/logged_preprocessed_cebu_avidity.csv")
+
+
+nrow(logged_preprocessed_cebu_IgG)
+nrow(logged_preprocessed_cebu_IgA)
+nrow(logged_preprocessed_cebu_IgM)
+nrow(logged_preprocessed_cebu_avidity)
+
 
 

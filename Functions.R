@@ -63,13 +63,15 @@ select_targets <- function(preprocessed_data,
   # Process each target
   for (target in targets) {
     df_copy <- preprocessed_data
+
+    target_col <- paste0(target, "_target")
     
     # Build the chosen target column
     mp <- mapping_list[[target]]
     tgt_chr <- as.character(df_copy$target)
     
    # Map positives, everything else is negative (0)
-    df_copy[[target]] <- ifelse(
+    df_copy[[target_col]] <- ifelse(
       tgt_chr %in% names(mp),
       as.numeric(dplyr::recode(tgt_chr, !!!mp, .default = NA_real_)),
       0
@@ -77,25 +79,25 @@ select_targets <- function(preprocessed_data,
     
     # Remove negatives for classifications that only include infected samples (eg: given infection, classify dengue vs chik)
     if (target %in% c("dengue_chik", "dengue_serotype")) {
-      df_copy <- df_copy[df_copy[[target]] %in% c(1, 2, 3, 4), ]  # keep only mapped positives
+      df_copy <- df_copy[df_copy[[target_col]] %in% c(1, 2, 3, 4), ]  # keep only mapped positives
     }
     # convert to factor with labels
     spec <- label_specs[[target]]
-    df_copy[[target]] <-
-      factor(df_copy[[target]], 
+    df_copy[[target_col]] <-
+      factor(df_copy[[target_col]], 
              levels = spec$levels, 
              labels = spec$labels)
 
     # Drop classes with fewer than min_samples
-    class_counts <- table(df_copy[[target]])
+    class_counts <- table(df_copy[[target_col]])
     valid_classes <- names(class_counts[class_counts >= min_samples])
     
     if (length(valid_classes) < length(class_counts)) {
       dropped <- names(class_counts[class_counts < min_samples])
       cat(sprintf("Target '%s': dropping class(es) with < %d samples: %s\n",
                   target, min_samples, paste(dropped, collapse = ", ")))
-      df_copy <- df_copy[df_copy[[target]] %in% valid_classes, ]
-      df_copy[[target]] <- droplevels(df_copy[[target]])  # remove unused factor levels
+      df_copy <- df_copy[df_copy[[target_col]] %in% valid_classes, ]
+      df_copy[[target_col]] <- droplevels(df_copy[[target_col]])  #
     }
     
     
