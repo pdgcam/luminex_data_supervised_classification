@@ -4,6 +4,8 @@ train_binary_models <- function(
     target,
     variables = NULL,
     positive_class = NULL,
+    cv_repeats = 1,
+    fold_index = NULL,
     metrics = c("ROC", "AUPRC", "Brier")) {
 
   # ---- Input Validation ----
@@ -92,6 +94,8 @@ train_binary_models <- function(
   binary_control <- caret::trainControl(
     method = "cv",
     number = 5,
+    repeats = if (cv_repeats > 1) cv_repeats else NA,
+    index = fold_index,    
     summaryFunction = combinedBinary,
     classProbs = TRUE,
     verboseIter = FALSE,
@@ -122,20 +126,34 @@ train_binary_models <- function(
   # ---- Train Models ----
   # model set: GLMnet, Random Forest, XGBoost, PLS-DA
 
-  # --- GLMnet ---
-  cat("Training GLMnet\n")
-  glmnet_model <- caret::train(
-    as.formula(paste(target, "~ .")),
-    data = model_data,
-    metric = "ROC",
-    method = "glmnet",
-    tuneGrid = expand.grid(
-      alpha = seq(0, 1, length.out = 5),
-      lambda = 10^seq(-3, 1, length.out = 20)
-    ),
-    trControl = binary_control,
-    preProcess = c("center", "scale")
-  )
+
+ # --- GLMnet ---
+  if (n_predictors < 2) {
+    cat("Training Bayesian Logistic GLM (single predictor)\n")
+    glmnet_model <- caret::train(
+      as.formula(paste(target, "~ .")),
+      data = model_data,
+      metric = "ROC",
+      method = "bayesglm",
+      family = "binomial",
+      trControl = binary_control,
+      preProcess = c("center", "scale")
+    )
+  } else {
+    cat("Training GLMnet\n")
+    glmnet_model <- caret::train(
+      as.formula(paste(target, "~ .")),
+      data = model_data,
+      metric = "ROC",
+      method = "glmnet",
+      tuneGrid = expand.grid(
+        alpha = seq(0, 1, length.out = 5),
+        lambda = 10^seq(-3, 1, length.out = 20)
+      ),
+      trControl = binary_control,
+      preProcess = c("center", "scale")
+    )
+  }
 
   # --- Random Forest ---
   # mtry values tuned to number of predictors

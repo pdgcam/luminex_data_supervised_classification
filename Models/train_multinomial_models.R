@@ -3,8 +3,7 @@ train_multinomial_models <- function(
     data,
     target,
     variables = NULL,
-    metrics = c("ROC", "AUPRC", "Brier", "StratBrier"),
-    univariate = FALSE) {
+    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
 
   # ---- Input Validation ----
   if (!target %in% names(data)) {
@@ -50,7 +49,7 @@ train_multinomial_models <- function(
   # single-predictor case now checked consistently up front (fixes a mismatch
   # in the original code, where training branched on `univariate` alone but
   # prediction extraction branched on `univariate || n_predictors == 1`)
-  is_univariate <- univariate || n_predictors == 1
+  is_univariate <- n_predictors == 1
 
   # ---- Function to calculate additional metrics ----
   calculate_multiclass_metrics <- function(data, lev = NULL, model = NULL) {
@@ -194,29 +193,27 @@ train_multinomial_models <- function(
 
   # ---- Train Models ----
   glmnet_model <- rf_model <- xgb_model <- pls_model <- tree_model <- NULL
-
-  if (is_univariate) {
-
-    cat("Training Decision Tree\n")
-    tree_model <- tryCatch({
+  # --- GLMnet, or multinomial logistic GLM if only one predictor ---
+  # glmnet needs a design matrix with >= 2 columns
+  if (n_predictors < 2) {
+    cat("Training Multinomial GLM (single predictor)\n")
+    glmnet_model <- tryCatch({
       caret::train(
         as.formula(paste(target, "~ .")),
         data = model_data,
         metric = "AUC_Micro",
-        method = "rpart",
-        tuneGrid = expand.grid(cp = c(0, 10^seq(-4, -1, length.out = 20))),
+        method = "multinom",
+        tuneGrid = expand.grid(decay = c(0, 1e-4, 1e-2, 1e-1)),
         trControl = multi_control,
-        control   = rpart::rpart.control(minsplit = 2, minbucket = 1),
-        preProcess = c("center", "scale")
+        preProcess = c("center", "scale"),
+        trace = FALSE
       )
     }, error = function(e) {
-      cat("Decision Tree training failed:", e$message, "\n")
+      cat("Multinomial GLM training failed:", e$message, "\n")
       NULL
     })
 
   } else {
-
-    # --- GLMnet (multinomial family auto-selected by caret for >2 classes) ---
     cat("Training GLMnet\n")
     glmnet_model <- tryCatch({
       caret::train(
@@ -235,72 +232,72 @@ train_multinomial_models <- function(
       cat("GLMnet training failed:", e$message, "\n")
       NULL
     })
-
-    # --- Random Forest (with permutation importance enabled) ---
-    cat("Training Random Forest\n")
-    rf_model <- tryCatch({
-      caret::train(
-        as.formula(paste(target, "~ .")),
-        data = model_data,
-        metric = "AUC_Micro",
-        method = "ranger",
-        tuneGrid = expand.grid(
-          mtry = mtry_values,
-          splitrule = c("gini", "extratrees"),
-          min.node.size = c(1, 5, 10)),
-        trControl = multi_control,
-        preProcess = c("center", "scale"),
-        importance = "permutation"    # <-- enables varImp() later, same fix as binary
-      )
-    }, error = function(e) {
-      cat("Random Forest training failed:", e$message, "\n")
-      NULL
-    })
-
-    # --- XGBoost (multi:softprob objective auto-selected by caret for >2 classes) ---
-    cat("Training XGBoost\n")
-    xgb_model <- tryCatch({
-      caret::train(
-        as.formula(paste(target, "~ .")),
-        data = model_data,
-        metric = "AUC_Micro",
-        method = "xgbTree",
-        tuneGrid = expand.grid(
-          nrounds = c(50, 100, 150),
-          max_depth = c(2, 4, 6),
-          eta = c(0.01, 0.1, 0.3),
-          gamma = 0,
-          colsample_bytree = 0.8,
-          min_child_weight = 1,
-          subsample = 0.8
-        ),
-        trControl = multi_control,
-        preProcess = c("center", "scale"),
-        verbose = 0
-      )
-    }, error = function(e) {
-      cat("XGBoost training failed:", e$message, "\n")
-      NULL
-    })
-
-    # --- PLS-DA ---
-    max_ncomp <- min(10, n_predictors)
-    cat("Training PLS-DA\n")
-    pls_model <- tryCatch({
-      caret::train(
-        as.formula(paste(target, "~ .")),
-        data = model_data,
-        metric = "AUC_Micro",
-        method = "pls",
-        tuneGrid = expand.grid(ncomp = seq_len(max_ncomp)),
-        trControl = multi_control,
-        preProcess = c("center", "scale")
-      )
-    }, error = function(e) {
-      cat("PLS-DA training failed:", e$message, "\n")
-      NULL
-    })
   }
+
+  # --- Random Forest (with permutation importance enabled) ---
+  cat("Training Random Forest\n")
+  rf_model <- tryCatch({
+    caret::train(
+      as.formula(paste(target, "~ .")),
+      data = model_data,
+      metric = "AUC_Micro",
+      method = "ranger",
+      tuneGrid = expand.grid(
+        mtry = mtry_values,
+        splitrule = c("gini", "extratrees"),
+        min.node.size = c(1, 5, 10)),
+      trControl = multi_control,
+      preProcess = c("center", "scale"),
+      importance = "permutation"
+    )
+  }, error = function(e) {
+    cat("Random Forest training failed:", e$message, "\n")
+    NULL
+  })
+
+  # --- XGBoost (multi:softprob objective auto-selected by caret for >2 classes) ---
+  cat("Training XGBoost\n")
+  xgb_model <- tryCatch({
+    caret::train(
+      as.formula(paste(target, "~ .")),
+      data = model_data,
+      metric = "AUC_Micro",
+      method = "xgbTree",
+      tuneGrid = expand.grid(
+        nrounds = c(50, 100, 150),
+        max_depth = c(2, 4, 6),
+        eta = c(0.01, 0.1, 0.3),
+        gamma = 0,
+        colsample_bytree = 0.8,
+        min_child_weight = 1,
+        subsample = 0.8
+      ),
+      trControl = multi_control,
+      preProcess = c("center", "scale"),
+      verbose = 0
+    )
+  }, error = function(e) {
+    cat("XGBoost training failed:", e$message, "\n")
+    NULL
+  })
+
+  # --- PLS-DA ---
+  max_ncomp <- min(10, n_predictors)
+  cat("Training PLS-DA\n")
+  pls_model <- tryCatch({
+    caret::train(
+      as.formula(paste(target, "~ .")),
+      data = model_data,
+      metric = "AUC_Micro",
+      method = "pls",
+      tuneGrid = expand.grid(ncomp = seq_len(max_ncomp)),
+      trControl = multi_control,
+      preProcess = c("center", "scale")
+    )
+  }, error = function(e) {
+    cat("PLS-DA training failed:", e$message, "\n")
+    NULL
+  })
 
   # ---- Extract Predictions ----
   filter_to_best <- function(preds, best_tune) {
@@ -315,30 +312,22 @@ train_multinomial_models <- function(
 
   all_predictions <- list()
 
-  if (is_univariate) {
-    if (!is.null(tree_model)) {
-      all_predictions$tree <- filter_to_best(tree_model$pred, tree_model$bestTune) %>%
-        dplyr::mutate(Model = "Decision Tree")
-    }
-  } else {
-    if (!is.null(glmnet_model)) {
-      all_predictions$glmnet <- filter_to_best(glmnet_model$pred, glmnet_model$bestTune) %>%
-        dplyr::mutate(Model = "GLMnet")
-    }
-    if (!is.null(rf_model)) {
-      all_predictions$rf <- filter_to_best(rf_model$pred, rf_model$bestTune) %>%
-        dplyr::mutate(Model = "Random Forest")
-    }
-    if (!is.null(xgb_model)) {
-      all_predictions$xgb <- filter_to_best(xgb_model$pred, xgb_model$bestTune) %>%
-        dplyr::mutate(Model = "XGBoost")
-    }
-    if (!is.null(pls_model)) {
-      all_predictions$pls <- filter_to_best(pls_model$pred, pls_model$bestTune) %>%
-        dplyr::mutate(Model = "PLS-DA")
-    }
+  if (!is.null(glmnet_model)) {
+    all_predictions$glmnet <- filter_to_best(glmnet_model$pred, glmnet_model$bestTune) %>%
+      dplyr::mutate(Model = "GLMnet")
   }
-
+  if (!is.null(rf_model)) {
+    all_predictions$rf <- filter_to_best(rf_model$pred, rf_model$bestTune) %>%
+      dplyr::mutate(Model = "Random Forest")
+  }
+  if (!is.null(xgb_model)) {
+    all_predictions$xgb <- filter_to_best(xgb_model$pred, xgb_model$bestTune) %>%
+      dplyr::mutate(Model = "XGBoost")
+  }
+  if (!is.null(pls_model)) {
+    all_predictions$pls <- filter_to_best(pls_model$pred, pls_model$bestTune) %>%
+      dplyr::mutate(Model = "PLS-DA")
+  }
   combined_preds <- dplyr::bind_rows(all_predictions) %>%
     dplyr::select(Model, rowIndex, obs, pred, dplyr::all_of(class_levels)) %>%
     dplyr::rename(
@@ -376,11 +365,8 @@ train_multinomial_models <- function(
     dplyr::left_join(coverage, by = "Model")
 
   # ---- Compile and Return ----
-  trained_models <- if (is_univariate) {
-    Filter(Negate(is.null), list(tree = tree_model))
-  } else {
-    Filter(Negate(is.null), list(glmnet = glmnet_model, rf = rf_model, xgb = xgb_model, pls = pls_model))
-  }
+   trained_models <- Filter(Negate(is.null),
+    list(glmnet = glmnet_model, rf = rf_model, xgb = xgb_model, pls = pls_model))
 
   return(list(
     models         = trained_models,

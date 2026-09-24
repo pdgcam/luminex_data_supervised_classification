@@ -1,6 +1,5 @@
 library(caret)
 library(here)
-library(corrplot)
 packageVersion("xgboost")
 packageVersion("caret")
 library(dplyr)
@@ -18,7 +17,7 @@ source(here('Models/train_binary_models.R'))
 source(here('Models/train_multinomial_models.R'))
 source(here('Functions.R'))
 
-packageVersion("xgboost")
+
 
 isotypes <- c("IgG", "IgA", "IgM", "avidity")
 
@@ -29,7 +28,7 @@ flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
 "JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII",
 "YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII",
 "WNV_DIII","WNV_NS1","SHERPADES_WNV_DIII",
-"ZIKV_NS1","ZIKV_VLP","ZIKVAS_DIII","ZIKVSU_NS1","SHERPADES_ZIKV_DIII")
+"ZIKV_NS1","ZIKV_VLP","ZIKV_DIII","ZIKVSU_NS1","SHERPADES_ZIKV_DIII")
 
 alpha_antigens <- c("CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP", "SHERPADES_CHIKV_E2", 
                     "MAYV_E2" , "SHERPADES_MAYV_E2",
@@ -139,6 +138,19 @@ table(data_with_binomial_targets_chik_list$cross_sectional$IgG$data$chik$chik_ta
 # Multinomial - also only looking at IgG
 table(data_with_multinomial_targets_list$ratio$IgG$data$dengue_serotype$dengue_serotype_target)
 table(data_with_multinomial_targets_list$ratio$IgG$data$dengue_serotype_neg$dengue_serotype_neg_target)
+
+table(data_with_multinomial_targets_list$cross_sectional$IgG$data$dengue_serotype$dengue_serotype_target)
+table(data_with_multinomial_targets_list$cross_sectional$IgG$data$dengue_serotype_neg$dengue_serotype_neg_target)
+
+dir.create("Data/model_prepared", showWarnings = FALSE, recursive = TRUE)
+ 
+saveRDS(data_with_binomial_targets_flavi_list,
+        file.path("Data/model_prepared", "data_with_binomial_targets_flavi_list.rds"))
+saveRDS(data_with_binomial_targets_chik_list,
+        file.path("Data/model_prepared", "data_with_binomial_targets_chik_list.rds"))
+saveRDS(data_with_multinomial_targets_list,
+        file.path("Data/model_prepared", "data_with_multinomial_targets_list.rds"))
+ 
 
 
 results_flavi_vs_not_list   <- list(ratio = list(), cross_sectional = list())
@@ -253,6 +265,30 @@ for (dataset_type in c("ratio", "cross_sectional")) {
   dir.create(file.path(base_dir, dataset_type), recursive = TRUE, showWarnings = FALSE)
 }
 
+flavi_vs_not_IgG <- readRDS(here("Results/Binary_Classification/cross_sectional/flavi_vs_not_IgG.rds"))
+flavi_vs_not_IgG$comparison
+
+# --- read results files 
+
+base_dir  <- here("Results/Binary_Classification")
+types     <- c("ratio", "cross_sectional")
+questions <- c("flavi_vs_not", "dengue_vs_not", "chik_vs_not", "dengue_vs_chik")
+isotypes  <- c("IgG", "IgA", "IgM", "avidity")
+
+
+all_results <- setNames(lapply(questions, function(q) {
+  setNames(lapply(types, function(ty) {
+    setNames(lapply(isotypes, function(iso) {
+      f <- file.path(base_dir, ty, paste0(q, "_", iso, ".rds"))
+      if (file.exists(f)) readRDS(f) else NULL
+    }), isotypes)
+  }), types)
+}), questions)
+
+
+names(all_results)
+
+
 # ---- Bundle the four result lists together, keyed by question name ----
 all_results <- list(
   flavi_vs_not   = results_flavi_vs_not_list,
@@ -296,8 +332,6 @@ for (dataset_type in c("ratio", "cross_sectional")) {
     row.names = FALSE
   )
 }
-
-
 
 # save multinomial
 dir.create("Results/Multinomial_Classification", showWarnings = FALSE, recursive = TRUE)
@@ -461,7 +495,7 @@ plot_auc_bar <- function(df, chance_line = 0.5) {
     theme(
       axis.text.x      = element_text(hjust = 0.5, size = 20, colour = "black"),
       axis.text.y      = element_text(size = 20),
-      axis.title.y     = element_text(size = 20), 
+      axis.title.y     = element_text(size = 18), 
       legend.text      = element_text(size = 20),
       panel.grid.minor = element_blank(),
       strip.text       = element_text(size = 20),
@@ -472,7 +506,7 @@ plot_auc_bar <- function(df, chance_line = 0.5) {
 
 
 
-
+quartz()
 plot_auc_bar(auc_avg_ratio)
 plot_auc_bar(auc_avg_cross_sectional)
 plot_auc_bar(auc_avg_ratio_multinomial)

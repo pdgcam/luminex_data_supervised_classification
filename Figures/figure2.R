@@ -6,14 +6,12 @@ library(stringr)
 library(patchwork)
 library(ggh4x)
 
-# import ratio df -  log10(post / pre)
+# import preprocessed data (log10 RAU)
 igg_data <- read.csv("Data/by_isotype/logged_preprocessed_cebu_IgG.csv")
 iga_data <- read.csv("Data/by_isotype/logged_preprocessed_cebu_IgA.csv")
 igm_data <- read.csv("Data/by_isotype/logged_preprocessed_cebu_IgM.csv")
 avidity_data <- read.csv("Data/by_isotype/logged_preprocessed_cebu_avidity.csv")
 
-
-sentivity_igg_data <- read.csv()
 
 
 # Define antigen groups
@@ -22,7 +20,7 @@ dengue_zika_antigens <- c(
   "DENV2_DIII", "DENV2_VLP", "DENV2_NS1", "SHERPADES_DENV2_DIII", 
   "DENV3_DIII", "DENV3_VLP", "DENV3_NS1", "SHERPADES_DENV3_DIII",
   "DENV4_DIII", "DENV4_VLP", "DENV4_NS1", "SHERPADES_DENV4_DIII",
-  "ZIKVAS_DIII", "ZIKV_VLP", "ZIKV_NS1", "ZIKVSU_NS1", "SHERPADES_ZIKV_DIII"
+  "ZIKV_DIII", "ZIKV_VLP", "ZIKV_NS1", "SHERPADES_ZIKV_DIII"
 )
 
 chik_onnv_mayv_antigens <- c(
@@ -42,14 +40,27 @@ pcr_colours <- c(
 )
 
 
+family_defs <- list(
+  Flavivirus = list(
+    confirmed = c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV"),
+    row_order = c("DIII", "SHERPADES-DIII", "NS1", "VLP"),
+    col_order = c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
+  ),
+  Alphavirus = list(
+    confirmed = c("CHIKV"),                    # PCR-confirmable alphaviruses
+    row_order = c("E2", "NSP123", "VLP"),
+    col_order = c("CHIKV")
+  )
+)
 
 # --- Prepare data for a given isotype 
 prepare_antibody_data <- function(data, 
                                   antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens), 
+                                  isotype = NULL,
                                   day0_as_post = FALSE) {
   data %>%
-    dplyr::select(id_patient, id_sample, days_since_infection, PCR, all_of(antigens)) %>%
-    pivot_longer(
+    dplyr::select(id_patient, id_sample, isotype, days_since_infection, PCR, all_of(antigens)) %>%
+    tidyr::pivot_longer(
       cols = all_of(antigens),
       names_to = "antigen",
       values_to = "value"
@@ -57,8 +68,6 @@ prepare_antibody_data <- function(data,
     mutate(
       pathogen = case_when(
         str_detect(antigen, "^SHERPADES_") ~ str_extract(antigen, "(?<=SHERPADES_)[^_]+"),
-        str_detect(antigen, "^ZIKVSU") ~ "ZIKV",
-        str_detect(antigen, "^ZIKVAS") ~ "ZIKV",
         TRUE ~ str_extract(antigen, "^[^_]+")
       ),
       antigen_type = case_when(
@@ -72,10 +81,10 @@ prepare_antibody_data <- function(data,
       ),
       days_since_infection = as.numeric(days_since_infection)
     ) %>%
-    group_by(id_patient) %>%
-    fill(PCR, .direction = "downup") %>%
-    ungroup() %>%
-    mutate(
+    dplyr::group_by(id_patient) %>%
+    tidyr::fill(PCR, .direction = "downup") %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(
       time_bin = case_when(
         days_since_infection < 0 ~ "pre",
         days_since_infection > 30 ~ "post",
@@ -88,117 +97,168 @@ prepare_antibody_data <- function(data,
         day0_as_post & days_since_infection == 0 ~ 30,
         TRUE ~ days_since_infection
       ),
-      color_group = if_else(pathogen == PCR, PCR, "Other")
+      color_group = dplyr::if_else(pathogen == PCR, PCR, "Other")
     ) %>%
-    group_by(id_patient, antigen, time_bin, x_position) %>%
-    summarise(
+    dplyr::group_by(id_patient, isotype, antigen, time_bin, x_position) %>%
+    dplyr::summarise(
       value = mean(value, na.rm = TRUE),
-      PCR = first(PCR),
-      color_group = first(color_group),
-      antigen_type = first(antigen_type),
-      pathogen = first(pathogen),
-      virus_family = first(virus_family),
+      PCR =  dplyr::first(PCR),
+      color_group = dplyr::first(color_group),
+      antigen_type = dplyr::first(antigen_type),
+      pathogen = dplyr::first(pathogen),
+      virus_family = dplyr::first(virus_family),
       .groups = "drop"
-    ) %>%
-    arrange(color_group == "Other", color_group)
+    ) 
 }
 
-
 # --- single plot for one isotype + virus family 
+# isotypes = NULL  -> every isotype in the data, as nested facet rows
+# isotypes = "IgG" -> single isotype, plain antigen rows
 plot_antibody_dynamics <- function(data,
-                                   isotype,
+                                   family,
+                                   isotypes = NULL, 
                                    subtitle = NULL,
-                                   # explicit pairing of structurally-equivalent antigen types into shared rows
-                                   antigen_class_map = c(
-                                     "DIII"           = "DIII / E2",     # flavi Domain III <-> alpha E2 (structural)
-                                     "E2"             = "DIII / E2",
-                                     "NS1"            = "NS1 / NSP123",  # flavi NS1 <-> alpha NSP123 (non-structural)
-                                     "NSP123"         = "NS1 / NSP123",
-                                     "DIII-SHERPADES" = "SHERPADES-DIII",   # shortened so the strip label doesn't clip
-                                     "SHERPA-DIII"    = "SHERPADES-DIII",
-                                     "VLP"            = "VLP"
-                                   ),
-                                   row_order = c("DIII / E2", "SHERPADES-DIII", "NS1 / NSP123", "VLP"),
-                                   col_order = c("CHIKV", "DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")) {
+                                   defs = family_defs) {
 
-  confirmed       <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV", "CHIKV")
-  flavi_pathogens <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
-  alpha_pathogens <- c("CHIKV", "ONNV", "MAYV", "RRV")
+  fam <- defs[[family]]
+  isotypes <- isotypes %||% unique(data$isotype)
+  multi    <- length(isotypes) > 1
 
-  y_label <- if (isotype == "avidity") "Avidity" else paste0(isotype, " Antibody Titre (log2)")
 
-  facet_data <- data %>%
-    filter(PCR %in% confirmed) %>%
-    mutate(
-      # facet is the patient's confirmed infection, NOT the antigen's own target
-      facet_pathogen = PCR,
-      facet_family = case_when(
-        facet_pathogen %in% flavi_pathogens ~ "Flavivirus",
-        facet_pathogen %in% alpha_pathogens ~ "Alphavirus",
-        TRUE ~ NA_character_
-      )
-    ) %>%
-    # keep only antigens from the same family as the facet
-    filter(virus_family == facet_family) %>%
-    mutate(
-      antigen_class = unname(ifelse(
-        antigen_type %in% names(antigen_class_map),
-        antigen_class_map[antigen_type],
-        antigen_type                       # unmapped types fall through unchanged
-      )),
-      antigen_class = factor(
-        antigen_class,
-        levels = intersect(c(row_order, sort(unique(antigen_class))), unique(antigen_class))
-      ),
-      facet_pathogen = factor(
-        facet_pathogen,
-        levels = intersect(col_order, unique(facet_pathogen))
-      )
+   d <- data %>%
+    dplyr::filter(isotype %in% isotypes,
+                  PCR %in% fam$confirmed,     # facet columns: this family's infections
+                  virus_family == family) %>% # antigens from the same family only
+    dplyr::mutate(
+      facet_pathogen = factor(PCR, levels = fam$col_order),
+      isotype        = factor(isotype, levels = isotypes),
+      # row_order first, then any unlisted types alphabetically after
+      antigen_type   = factor(antigen_type,
+                              levels = intersect(c(fam$row_order, sort(unique(antigen_type))),
+                                                 unique(antigen_type)))
     )
+ 
+  y_label <- if (identical(isotypes, "avidity")) "Avidity"
+             else if (multi) "Antibody Titre (log2)"
+             else paste0(isotypes, " Antibody Titre (log2)")
 
-  # coloured: antigen matches this facet's confirmed pathogen
-  foreground_data <- facet_data %>% filter(pathogen == facet_pathogen)
-  # grey: all other same-family antigens
-  background_data <- facet_data %>% filter(pathogen != facet_pathogen)
-
-  ggplot(facet_data, aes(x = x_position, y = value,
-                         group = interaction(id_patient, pathogen, antigen))) +
-    geom_line(data = background_data,  color = "grey80", alpha = 0.5, linewidth = 0.5) +
-    geom_point(data = background_data, color = "grey80", alpha = 0.5, size = 1.5) +
-    geom_line(data = foreground_data,  aes(color = color_group), alpha = 0.8, linewidth = 0.7) +
-    geom_point(data = foreground_data, aes(color = color_group), alpha = 0.8, size = 1.8) +
-    facet_grid(
-      antigen_class ~ facet_pathogen,
-      scales = "free_y", drop = TRUE,
-      labeller = labeller(antigen_class = label_wrap_gen(12))
+    f <- if (multi) isotype + antigen_type ~ facet_pathogen
+       else    antigen_type ~ facet_pathogen
+ 
+ 
+  fg <- d %>% dplyr::filter(pathogen == facet_pathogen)  # coloured: matches the facet
+  bg <- d %>% dplyr::filter(pathogen != facet_pathogen)  # grey: other same-family antigens
+ 
+  ggplot(d, aes(x = x_position, y = value,
+                group = interaction(id_patient, pathogen, antigen, isotype))) +
+    geom_line(data = bg,  color = "grey80", alpha = 0.5, linewidth = 0.5) +
+    geom_point(data = bg, color = "grey80", alpha = 0.5, size = 1.5) +
+    geom_line(data = fg,  aes(color = PCR), alpha = 0.8, linewidth = 0.7) +
+    geom_point(data = fg, aes(color = PCR), alpha = 0.8, size = 1.8) +
+    ggh4x::facet_nested(
+      f, scales = "free_y", drop = TRUE,
+      labeller = labeller(antigen_type = label_wrap_gen(12)),
+      strip = ggh4x::strip_nested(bleed = FALSE),
+      nest_line = element_line(colour = "grey50")
     ) +
     scale_color_manual(values = pcr_colours, name = "PCR Confirmed") +
-    scale_x_continuous(
-      breaks = c(-30, 0, 30),
-      labels = c("Pre", "0", ">30")     # short so repeated axes don't overlap
-    ) +
-    labs(x = "Days since PCR+ve infection", y = y_label, subtitle = subtitle) +
+    scale_x_continuous(breaks = c(-30, 0, 30), labels = c("Pre", "0", ">30")) +
+    labs(x = "Days since PCR+ve infection", y = y_label,
+         subtitle = subtitle %||% family) +
     theme_bw() +
     theme(
       strip.text.x     = element_text(size = 16),
-      strip.text.y     = element_text(size = 12, angle = 0, hjust = 0),  # horizontal = no rotation clipping
+      strip.text.y     = element_text(size = 12, angle = 0, hjust = 0),
       strip.background = element_rect(fill = "#ffffff"),
       axis.text        = element_text(size = 12),
       axis.title       = element_text(size = 16),
-      legend.position  = "bottom",
-      legend.text      = element_text(size = 14),
-      legend.title     = element_text(size = 14),
-      legend.direction = "horizontal",
-      legend.margin    = margin(0, 0, 0, 0),
       panel.spacing.x  = unit(1.5, "lines"),
+      legend.position = "none",
       panel.spacing.y  = unit(0.8, "lines"),
       panel.grid.minor = element_blank(),
-      plot.subtitle = element_text(size = 14, face = "italic"),
+      plot.subtitle    = element_text(size = 14, face = "italic"),
       plot.margin      = margin(t = 10, r = 25, b = 10, l = 10),
       plot.background  = element_rect(fill = "white", color = "black", linewidth = 0.5)
     )
 }
 
+
+
+all_antigens <- c(dengue_zika_antigens, chik_onnv_mayv_antigens)
+
+prepared_data <- prepare_antibody_data(
+  dplyr::bind_rows(igg_data, igm_data, iga_data),
+  antigens = all_antigens
+)
+
+
+isos <- c("IgG", "IgA", "IgM")
+
+fig_flavi <- purrr::imap(purrr::set_names(isos), function(iso, i) {
+  p <- plot_antibody_dynamics(prepared_data, "Flavivirus", isotypes = iso) +
+    labs(subtitle = NULL, title = iso) +
+    theme(
+      plot.title = ggtext::element_textbox(
+        fill = "grey85", colour = "black", width = unit(1, "npc"),
+        padding = margin(4, 8, 4, 8), margin = margin(b = 4),
+        halign = 0.5, size = 15, face = "bold"
+      ),
+      plot.background = element_blank()
+    )
+  if (iso != tail(isos, 1)) p <- p + theme(axis.title.x = element_blank(),
+                                           axis.text.x  = element_blank())
+  if (iso != isos[1])       p <- p + theme(strip.text.x = element_blank())
+  p
+})
+
+
+flavi_dynamics <- patchwork::wrap_plots(fig_flavi, ncol = 1)  
+
+
+
+fig_alpha <- purrr::imap(purrr::set_names(isos), function(iso, i) {
+  p <- plot_antibody_dynamics(prepared_data, "Alphavirus", isotypes = iso) +
+    labs(subtitle = NULL, title = iso) +
+    theme(
+      plot.title = ggtext::element_textbox(
+        fill = "grey85", colour = "black", width = unit(1, "npc"),
+        padding = margin(4, 8, 4, 8), margin = margin(b = 4),
+        halign = 0.5, size = 15, face = "bold"
+      ),
+      plot.background = element_blank()
+    )
+  if (iso != tail(isos, 1)) p <- p + theme(axis.title.x = element_blank(),
+                                           axis.text.x  = element_blank())
+  if (iso != isos[1])       p <- p + theme(strip.text.x = element_blank())
+  p
+})
+
+alpha_dynamics <- patchwork::wrap_plots(fig_alpha, ncol = 1)  
+
+
+# --- create output folder
+dir.create("Results/Fig2", recursive = TRUE, showWarnings = FALSE)
+ggsave("Results/Fig2/dynamics_flavi.png", flavi_dynamics,
+       width = 12, height = 14, dpi = 300, limitsize = FALSE)
+
+ggsave("Results/Fig2/dynamics_alpha.png", alpha_dynamics,
+       width = 5, height = 14, dpi = 300, limitsize = FALSE)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---- OLD CODE ------
 
 prepared_igg_data <- prepare_antibody_data(igg_data, antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens))
 prepared_igm_data <- prepare_antibody_data(igm_data, antigens = c(dengue_zika_antigens, chik_onnv_mayv_antigens))
@@ -219,14 +279,14 @@ p_iga <- plot_antibody_dynamics(prepared_iga_data, "IgA") +
 
 p_avidity <- plot_antibody_dynamics(prepared_avidity_data, "avidity") +
   force_panelsizes(rows = unit(3, "cm"), cols = unit(3, "cm"))
-
+quartz()
 print(p_igg)
+quartz()
 print(p_igm)
 print(p_iga)
 print(p_avidity)
 
-# --- create output folder
-dir.create("Results/Fig2", recursive = TRUE, showWarnings = FALSE)
+
 
 # --- save all four
 ggsave("Results/Fig2/dynamics_IgG.png", p_igg,  width = 12, height = 10)

@@ -4,42 +4,30 @@ library(ggforce)
 library(stringr)
 library(dplyr)
 library(patchwork)
+library(corrplot)
 
 
 ratio_df_IgG <- readRDS('Data/by_isotype/ratio_df_IgG.rds')
-ratio_df_IgA <- readRDS('Data/by_isotype/ratio_df_IgA.rds')
-ratio_df_IgM <- readRDS('Data/by_isotype/ratio_df_IgM.rds')
-ratio_df_avidity <- readRDS('Data/by_isotype/ratio_df_avidity.rds')
 
+ratio_df_IgG_gmean <- readRDS('Data/by_isotype_gmean/ratio_df_IgG.rds')
 
 pcr_target <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
 
-dengue_zika_antigens <- c(
-  "DENV1_DIII", "DENV1_VLP", "DENV1_NS1",
-  "DENV2_DIII", "DENV2_VLP", "DENV2_NS1",
-  "DENV3_DIII", "DENV3_VLP", "DENV3_NS1",
-  "DENV4_DIII", "DENV4_VLP", "DENV4_NS1",
-  "ZIKVAS_DIII", "ZIKV_VLP", "ZIKV_NS1", "ZIKVSU_NS1",
-  "SHERPADES_DENV1_DIII", "SHERPADES_DENV2_DIII", 
-  "SHERPADES_DENV3_DIII", "SHERPADES_DENV4_DIII",
-  "SHERPADES_ZIKV_DIII"
+flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
+"DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
+"DENV3_DIII","DENV3_NS1","DENV3_VLP", "SHERPADES_DENV3_DIII",
+"DENV4_DIII","DENV4_NS1","DENV4_VLP", "SHERPADES_DENV4_DIII",
+"JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII",
+"YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII",
+"WNV_DIII","WNV_NS1","SHERPADES_WNV_DIII",
+"ZIKV_DIII", "ZIKV_NS1","ZIKV_VLP","SHERPADES_ZIKV_DIII")
+
+antigen_blocks <- list(
+  "VLP / E" = c("VLP", "E"),
+  "NS1"  = "NS1",
+  "DIII (SHERPADES)"  = "SHERPADES"
 )
 
-
-#   log_gm_rel = mean( log2( b_i / a_i ) )  ==  log2( GM(B) / GM(A) )
-#
-#   where  a = homologous antigen (matching the infecting serotype)  [reference]
-#          b = the antigen of the current panel                     [test]
-#
-#   These two forms are algebraically identical because the mean of differences
-#   equals the difference of means:
-#       mean(log2 b - log2 a) = mean(log2 b) - mean(log2 a)
-#                             = log2(GM(B)) - log2(GM(A))
-#                             = log2(GM(B) / GM(A))
-#   This holds for paired (element-wise) ratios and for all n_a x n_b pairwise
-#   combinations alike -- the point estimate is the same. We use the PAIRED form
-#   because the resulting confidence interval is the correct within-subject one.
-# ================================================
 
 
 # --- Functions ---
@@ -64,362 +52,244 @@ fmt_antigen <- function(x) dplyr::case_when(
     TRUE                         ~ str_replace(x, "_", " ")
   )
 
-fmt_antigen_multiline <- function(x) dplyr::case_when(
-  str_detect(x, "^SHERPADES_") ~ str_replace(x, "^SHERPADES_([^_]+)_DIII$", "SHERPADES\n\\1\nDIII"),
-  str_detect(x, "^ZIKVAS_")    ~ "ZIKV\nDIII",
-  TRUE                         ~ str_replace(x, "_", "\n")
-)
-  
-gmean <- function(x, conf_level = 0.95) {
-    x <- x[is.finite(x) & x > 0]                   # GM is undefined for <= 0
-    if (length(x) == 0) {
-      return(c(mean = NA_real_, lwr.ci = NA_real_, upr.ci = NA_real_))
-    }
-    out <- DescTools::Gmean(x, conf.level = conf_level)
-    if (is.null(names(out))) {
-      return(c(mean = unname(out[1]), lwr.ci = NA_real_, upr.ci = NA_real_))
-    }
-    c(mean   = unname(out[["mean"]]),
-      lwr.ci = unname(out[["lwr.ci"]]),
-      upr.ci = unname(out[["upr.ci"]]))
-  }
-  
-  # log2 GMR + t-based CI, computed on the log2 scale. Returns exactly ONE row.
-log2_gmr <- function(ratios, conf.level =  0.95) {
-    ratios <- ratios[is.finite(ratios) & ratios > 0]
-    n <- length(ratios)
-    if (n == 0) {
-      return(tibble(n = 0L, log_gm_rel = NA_real_,
-                    gm_lower = NA_real_, gm_upper = NA_real_))
-    }
-    lr <- log2(ratios)
-    m  <- mean(lr)
-    s  <- stats::sd(lr)
-    # n < 2, or zero variance (e.g. the diagonal, where every ratio is 1)
-    if (n < 2 || !is.finite(s) || s == 0) {
-      return(tibble(n = n, log_gm_rel = m,
-                    gm_lower = NA_real_, gm_upper = NA_real_))
-    }
-    se <- s / sqrt(n)
-    tc <- stats::qt(1 - (1 - conf.level) / 2, df = n - 1)
-    tibble(n          = n,
-           log_gm_rel = m,
-           gm_lower   = m - tc * se,
-           gm_upper   = m + tc * se)
-  }
- 
 
-# to ensure we get both ZIKVSU and ZIKVAS
-normalise_pathogen <- function(x) {
-  dplyr::case_when(
-    x %in% c("ZIKVSU", "ZIKVAS") ~ "ZIKV",
-    TRUE ~ x
-  )
-}
-
-
-# prepare data and plot 
+# -- prepare data ---
 prep_data <- function(data, 
                       antigen, 
                       flavi_targets = pcr_target,
-                      antigen_pool = dengue_zika_antigens,
-                      conf_level = 0.95) {
-if (antigen == "SHERPADES") {
-    filtered_antigens <- antigen_pool[str_detect(antigen_pool, "^SHERPADES_.*_DIII$")]
-    target_to_col <- setNames(
-      vapply(flavi_targets, get_antigen_col, character(1), suffix = "SHERPADES"),
-      flavi_targets
-    )
+                      antigens = flavi_antigens) {
+
+if (identical(antigen, "SHERPADES")) {
+    filtered_antigens <- antigens[str_detect(antigens, "^SHERPADES_.*_DIII$")]
   } else {
-    filtered_antigens <- antigen_pool[
-      str_detect(antigen_pool, paste0(antigen, "$")) &
-        !str_detect(antigen_pool, "^SHERPADES_")
+    pattern <- paste0("_(", paste(antigen, collapse = "|"), ")$")
+    filtered_antigens <- antigens[
+      str_detect(antigens, pattern) & !str_detect(antigens, "^SHERPADES_")
     ]
-    target_to_col <- setNames(
-      vapply(flavi_targets, function(t) get_antigen_col(t, antigen), character(1)),
-      flavi_targets
-    )
   }
+
+
   if (length(filtered_antigens) == 0) {
     stop("No antigens matched antigen = '", antigen, "'.\n  Available: ",
-         paste(antigen_pool, collapse = ", "))
+         paste(antigens, collapse = ", "))
   }
-  missing_cols <- setdiff(unique(c(filtered_antigens, unname(target_to_col))),
-                          names(data))
+  
+  missing_cols <- setdiff(filtered_antigens, names(data))
+  
   if (length(missing_cols) > 0) {
     stop("These expected columns are not present in `data`: ",
          paste(missing_cols, collapse = ", "))
   }
-
-plot_data_list <- list()
-mean_data_list <- list()
-forest_data_list <- list() 
-
-# Map each pcr_target to its actual column name in filtered_antigens
-for (infecting_pathogen in flavi_targets) {
   
-  diagonal_data  <- data %>% filter(target == infecting_pathogen)
-  infecting_col  <- target_to_col[[infecting_pathogen]]
-  
-  for (current_antigen in filtered_antigens) {
-    key <- paste(infecting_pathogen, current_antigen, sep = "_")
-    antigen_pathogen <- normalise_pathogen(get_antigen_pathogen(current_antigen))
-    is_diagonal <-  identical(antigen_pathogen, normalise_pathogen(infecting_pathogen))
-    panel_type <- if (is_diagonal) "diagonal" else "off_diagonal"
+  # antigen -> pathogen lookup
+  antigen_pathogen <- vapply(filtered_antigens, get_antigen_pathogen, character(1))
 
-    if (is_diagonal){
-      vals <- diagonal_data[[current_antigen]] # homologous - absolute titres 
-    } else {
-      vals <- diagonal_data[[current_antigen]] / diagonal_data[[infecting_col]] # relative ratio
-    }
-    
-      
-    plot_data_list[[key]] <- tibble(
-      value            = vals,
-      infecting_target = infecting_pathogen,
-      antigen          = current_antigen,
-      panel_type       = panel_type
-    )
-
-
-    # Geometric mean
-    gm_value <- gmean(vals, conf_level = conf_level)
-    
-    mean_data_list[[key]] <- tibble(
-        infecting_target = infecting_pathogen,
-        antigen          = current_antigen,
-        panel_type       = panel_type,
-        n                = length(vals),
-        gm               = gm_value[["mean"]],
-        gm_lwr           = gm_value[["lwr.ci"]],
-        gm_upr           = gm_value[["upr.ci"]],
-        label            = round(gm_value[["mean"]], 2)
-      )
-
-    ratios <- diagonal_data[[current_antigen]] / diagonal_data[[infecting_col]]
-
-    forest_data_list[[key]] <- log2_gmr(ratios) %>%
-      mutate(
-        infecting_target = infecting_pathogen,
-        antigen          = current_antigen,
-        panel_type       = panel_type) %>%
-      dplyr::select(infecting_target, antigen, panel_type,
-                    n, log_gm_rel, gm_lower, gm_upper)}}
-
-  antigen_levels <- fmt_antigen(filtered_antigens)
-  target_levels  <- flavi_targets
-
-
-  add_labels <- function(df) {
-    df %>% mutate(
-      antigen_label = factor(fmt_antigen(antigen), levels = antigen_levels),
-      target_label  = factor(infecting_target,  levels = target_levels)
-    )
-  }
- 
-  plot_data <- bind_rows(plot_data_list) %>% add_labels()
-  mean_data <- bind_rows(mean_data_list) %>% add_labels()
-
-  
-  forest_data <- bind_rows(forest_data_list) %>%
-    dplyr::filter(!is.na(log_gm_rel)) %>%
-    add_labels() %>%
+  plot_data <- data %>%
+    filter(target %in% flavi_targets) %>%
+    dplyr::select(id_patient, target, all_of(filtered_antigens)) %>%
+    pivot_longer(
+      cols      = all_of(filtered_antigens),
+      names_to  = "antigen",
+      values_to = "ratio"
+    ) %>%
     mutate(
-      # homologous sits at exactly 0 on the log2 scale, by construction
-      label_text = if_else(
-        panel_type == "diagonal",
-        "0",
-        sprintf("%.2f (%.2f - %.2f)", log_gm_rel, gm_lower, gm_upper)
-      )
+      infecting_target = target,
+      antigen_pathogen = unname(antigen_pathogen[antigen]),
+      reactivity = if_else(infecting_target == antigen_pathogen,
+                           "Homologous", "Heterologous"),
+      antigen_label = factor(fmt_antigen(antigen),
+                             levels = fmt_antigen(filtered_antigens)),
+      target_label  = factor(infecting_target, levels = flavi_targets)
     )
+
   list(
     plot_data    = plot_data,
-    mean_data    = mean_data,
-    forest_data  = forest_data,
-    antigen_cols = filtered_antigens,
-    conf_level   = conf_level
-  )
-}
-
-
-# ---- Plots 
-
-
-plot_ratio_histogram_homologous <- function(res,
-                                 label_fmt = "GM = %.2f",
-                                 ratio_label_fmt = "Ratio = %.2f",
-                                 bins = 10) {
-
-  stopifnot(is.list(res), !is.null(res$plot_data), !is.null(res$mean_data))
-
-  gm_labels <- res$mean_data %>%
-    dplyr::filter(!is.na(gm), panel_type == "diagonal") %>%
-    mutate(label = sprintf(label_fmt, log2(gm)))
-
-  antigen_labeller <- as_labeller(fmt_antigen_multiline)
-
-  diagonal_panel_data <- res$plot_data %>% dplyr::filter(panel_type == "diagonal")
-
-    # shared x-axis across all rows
-  x_range  <- range(log2(diagonal_panel_data$value), na.rm = TRUE)
-  print(x_range)
-  x_breaks <- pretty(x_range, n = 4)
-  x_limits <- range(x_breaks)
-
-  common_theme <- theme_minimal() +
-    theme(
-      strip.text.x     = element_text(size = 20),
-      axis.line        = element_line(colour = "black", linewidth = 0.7),
-      panel.grid       = element_blank(),
-      panel.spacing    = unit(1, "lines"),
-      legend.position  = "none",
-      axis.text.x      = element_text(size = 20, angle = 45, hjust = 1),
-      axis.text.y      = element_text(size = 20),
-      axis.title.x     = element_blank(),
-      axis.title.y     = element_text(size = 20),
-      panel.background = element_rect(fill = "#ffffff", colour = NA),
-      plot.background  = element_rect(fill = "white", colour = NA),
-      axis.ticks.x     = element_line(colour = "black", linewidth = 0.5, angle = 90),
-      axis.ticks.y     = element_line(colour = "black", linewidth = 0.5),
-      panel.border     = element_rect(colour = "black", fill = NA, linewidth = 0.3), 
-      plot.margin      = margin(t = 5, r = 12, b = 5, l = 5)   # extra right margin so last panel isn't cut
-    )
-
-  build_row <- function(ag_type_val) {
-    dd <- diagonal_panel_data %>% dplyr::filter(ag_type == ag_type_val) %>% droplevels()
-    gl <- gm_labels  %>% dplyr::filter(ag_type == ag_type_val) %>% droplevels()
-
-    ggplot(dd, aes(x = log2(value))) +
-      geom_histogram(bins = bins, alpha = 0.8, fill = "#e972a7") +
-      geom_vline(xintercept = 0, colour = "red", linetype = "dashed",
-                 linewidth = 0.5, alpha = 0.8) +
-      geom_label(
-        data          = gl,
-        aes(label     = label),
-        x             = -Inf, y = Inf,
-        inherit.aes   = FALSE,
-        hjust         = -0.1, vjust = 2.3,
-        size          = 6, fill = "white",
-        label.padding = unit(0.15, "lines"),
-        label.size    = 0.3
-      ) +
-      scale_y_continuous(name = "Count") +
-      scale_x_continuous(breaks = x_breaks) + coord_cartesian(xlim = x_limits) + 
-      facet_wrap(vars(antigen), nrow = 1, labeller = antigen_labeller,
-                 strip.position = "top", axes = "all_x") +
-      common_theme
-  }
-
-    ag_type_levels <- diagonal_panel_data %>%
-    dplyr::distinct(ag_type) %>%
-    mutate(
-      ag_type_chr = as.character(ag_type),
-      is_sherpades = grepl("^SHERPADES", ag_type_chr),
-      core_type    = factor(sub("^SHERPADES\\s*", "", ag_type_chr),
-                            levels = c("VLP", "NS1", "DIII"))
-    ) %>%
-    arrange(is_sherpades, core_type) %>%
-    pull(ag_type_chr)
-
-  row_plots <- lapply(ag_type_levels, build_row)
-
-  patchwork::wrap_plots(row_plots, ncol = 1)
-}
+    antigen_cols = filtered_antigens
+  )}
 
 
 
-antigen_types <- c("VLP", "NS1", "DIII", "SHERPADES")
-type_order <- c("VLP", "NS1", "DIII", "SHERPADES")
+denv_serotypes <- c("DENV1", "DENV2", "DENV3", "DENV4")
 
-
-ratio_dfs <- list(
-  IgG     = ratio_df_IgG,
-  IgA     = ratio_df_IgA,
-  IgM     = ratio_df_IgM,
-  avidity = ratio_df_avidity
+antigen_blocks <- list(
+  "VLP / E" = c("VLP", "E"),
+  "NS1"                = "NS1",
+  "DIII (SHERPADES)"   = "SHERPADES"
 )
 
-prep_data_list <- list()
-homologous_hist_list <- list() 
+res_list <- lapply(antigen_blocks, function(a) prep_data(ratio_df_IgG, a))
 
+all_ratios <- unlist(lapply(res_list, function(r) r$plot_data$ratio))
+x_lim <- c(min(all_ratios, na.rm = TRUE) * 0.8,
+           max(all_ratios, na.rm = TRUE) * 1.2)
 
-for (iso in names(ratio_dfs)) {
-    plot_data_list <- list()
-    mean_data_list <- list()
-  
-  for (antigen in antigen_types) {
+make_panel <- function(res, title, suffixes, show_x = FALSE) {
 
-    key <- paste(iso, antigen, sep = "_")   # composite key: nothing overwrites
-    message("Processing: ", key)
+  homol_cells <- res$plot_data %>%
+    filter(reactivity == "Homologous") %>%
+    distinct(target_label, antigen_label)
 
-    res <- prep_data(ratio_dfs[[iso]], antigen = antigen)
-    prep_data_list[[key]] <- res
-        plot_data_list[[antigen]] <- res$plot_data
-    mean_data_list[[antigen]] <- res$mean_data
+  p <- ggplot(res$plot_data, aes(x = ratio, fill = reactivity)) +
+        geom_rect(data = homol_cells,
+              xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,
+              fill = "#fffcfc", inherit.aes = FALSE) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "red") +
+    geom_histogram(binwidth = 0.25, colour = NA) +
+    facet_grid(target_label ~ antigen_label, switch = "y") +
+    scale_x_log10(breaks = c(0.1, 1, 10, 100),
+                  labels = c("0.1", "1", "10", "100")) +
+    scale_y_continuous(breaks = scales::breaks_pretty(n = 3),
+                       expand = expansion(mult = c(0, 0.05))) +
+    scale_fill_manual(
+      values = c(Homologous = "palevioletred", Heterologous = "steelblue"),
+      breaks = c("Homologous", "Heterologous")
+    ) +
+    coord_cartesian(xlim = x_lim) +
+    labs(title = title, x = NULL, y = "Count") +
+    theme_bw(base_size = 8) +
+    theme(panel.grid.minor   = element_blank(),
+          strip.background   = element_rect(fill = "white"),
+          panel.spacing.y    = unit(0.8, "lines"),
+          strip.text.x     = element_text(size = 16),
+          strip.text.y     = element_text(size = 16, angle = 0, hjust = 0),
+          strip.text.y.left  = element_text(angle = 0),
+          axis.text.x        = element_text(size = 16),
+          axis.text.y        = element_text(size = 16),
+           axis.title         = element_text(size = 16),
+          plot.title         = element_text(face = "bold", size = 9),
+          legend.position    = "none")
+
+  if (!show_x) {
+    p <- p + theme(axis.text.x = element_blank(),
+                   axis.ticks.x = element_blank())
   }
-
-
-  # combine across all antigens for this isotype
-  res_combined <- list(
-    plot_data = dplyr::bind_rows(plot_data_list),
-    mean_data = dplyr::bind_rows(mean_data_list)
-  )
-
-  antigen_order <- res_combined$plot_data %>%
-    dplyr::distinct(.data$antigen) %>%
-    mutate(
-      ag_type   = factor(sub(".*_", "", as.character(.data$antigen)), levels = type_order),
-      sherpades = grepl("^SHERPADES_", as.character(.data$antigen)),
-      pathogen  = sub("_[^_]+$", "", sub("^SHERPADES_", "", as.character(.data$antigen)))
-    ) %>%
-    arrange(.data$sherpades, .data$ag_type, .data$pathogen) %>%
-    pull(.data$antigen) %>%
-    as.character()
-
-  # safety net: never silently drop an antigen
-  antigen_order <- union(
-    antigen_order,
-    unique(as.character(res_combined$plot_data$antigen))
-  )
-  
-  res_combined$plot_data <- add_facet_vars(res_combined$plot_data)
-  res_combined$mean_data <- add_facet_vars(res_combined$mean_data)
-
-  res_combined$plot_data <- res_combined$plot_data %>%
-    mutate(antigen = factor(antigen, levels = antigen_order))
-  res_combined$mean_data <- res_combined$mean_data %>%
-    mutate(antigen = factor(antigen, levels = antigen_order))
-  
-  homologous_hist_list[[iso]] <- plot_ratio_histogram_homologous(res_combined)
+  p
 }
 
+panels <- lapply(seq_along(antigen_blocks), function(i) {
+  make_panel(res_list[[i]],
+             title    = "",
+             suffixes = antigen_blocks[[i]],
+             show_x   = i == length(antigen_blocks))
+})
 
-homologous_hist_list$IgG
-homologous_hist_list$IgA
-homologous_hist_list$IgM
 
-# ---- Save for each isotype 
+combined_igg_ratio_panel <- wrap_plots(panels, ncol = 1) 
 
-for (iso in names(homologous_hist_list)) {
 
-  message("Saving homologous histogram: ", iso)
+dir.create("Results/Fig3", recursive = TRUE, showWarnings = FALSE)
+ggsave("Results/Fig3/ratio_histograms_IgG.png", combined_igg_ratio_panel,
+       width = 23, height = 15, dpi = 300)
 
-  hist_p <- homologous_hist_list[[iso]]
 
-  n_row <- length(hist_p)
 
-  n_col <- vapply(seq_len(n_row), function(i) {
-    built <- ggplot_build(hist_p[[i]])
-    nrow(built$layout$layout)
-  }, numeric(1)) %>% max()
+# ---- Summary Nos : how many id_patient have ratio < 1 - mean thath post titre is greater than pre titre
+flavi_gt1_summary <- ratio_long %>%
+  filter(
+    target  %in% pcr_target,          # same target filter as prep_data()
+    antigen %in% flavi_antigens,
+    component %in% c("VLP", "E", "NS1", "DIII (SHERPADES)")
+  ) %>%
+  mutate(
+    antigen = factor(
+      if_else(component %in% c("VLP", "E"), "VLP / E", component),
+      levels = names(antigen_blocks)
+    ),
+    reactivity = factor(
+      if_else(target == virus, "Homologous", "Heterologous"),
+      levels = c("Homologous", "Heterologous")
+    )
+  ) %>%
+  group_by(isotype, antigen, reactivity) %>%
+  summarise(
+    n               = n(),
+    n_gt_1          = sum(ratio > 1),
+    prop_gt_1       = mean(ratio > 1),
+    median_ratio    = median(ratio),
+    n_samples      = n_distinct(id_patient),
+    .groups = "drop"
+  ) %>%
+  arrange(isotype, antigen, reactivity)
 
-  tag <- gsub("[^A-Za-z0-9_-]", "_", iso)
+flavi_gt1_summary %>% print(n = Inf)
 
-  ggsave(file.path("Results/Fig3", sprintf("hist_homologous_%s.png", tag)), hist_p,
-         width  = n_col * 3.4 + 2,     # was 2.2 + 1 — more room per column
-         height = n_row * 3.6 + 2,     # was 2.2 + 1 — more room per row
-         units  = "in", dpi = 300, limitsize = FALSE)
-}
+
+flavi_gt1_wide <- flavi_gt1_summary %>%
+  dplyr::mutate(summary = sprintf("%d/%d (%.0f%%)", n_gt_1, n, 100 * prop_gt_1)) %>%
+  dplyr::select(isotype, antigen, reactivity, summary) %>%
+  tidyr::pivot_wider(names_from = reactivity, values_from = summary)
+
+flavi_gt1_wide
+
+
+
+
+
+# --- correlation plot 
+colnames(ratio_df_IgG_gmean)
+names(ratio_df_IgG_gmean)[names(ratio_df_IgG_gmean) == "ZIKVAS_DIII"] <- "ZIKV_DIII"
+
+
+ratio_df_IgG_flavi <- ratio_df_IgG %>%
+    dplyr::select(all_of(flavi_antigens)) %>%
+    as.data.frame()
+
+cor_mat <- cor(ratio_df_IgG_flavi, use = "pairwise.complete.obs", method = "pearson")
+
+cor_df <- reshape2::melt(cor_mat, varnames = c("Antigen1", "Antigen2"),
+               value.name = "correlation", na.rm = TRUE)
+
+
+grp_order   <- c("DIII", "SHERPADES", "NS1", "VLP", "E")
+virus_order <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV", "JEV", "WNV", "YFV")
+
+grp <- ifelse(grepl("^SHERPADES", flavi_antigens),
+              "SHERPADES",
+              sub(".*_", "", flavi_antigens))
+
+vir <- sub("^SHERPADES_", "", flavi_antigens)
+vir <- sub("_(DIII|NS1|VLP|E)$", "", vir)
+
+ord <- order(match(grp, grp_order), match(vir, virus_order))
+antigen_levels <- flavi_antigens[ord]
+
+cor_df$Antigen1 <- factor(cor_df$Antigen1, levels = antigen_levels)
+cor_df$Antigen2 <- factor(cor_df$Antigen2, levels = antigen_levels)
+
+i <- as.integer(cor_df$Antigen1)
+j <- as.integer(cor_df$Antigen2)
+
+cor_half <- cor_df[j >= i, ]   # flip to j <= i for the other triangle
+                               # use > / < to also drop the diagonal
+
+
+quartz()
+ggplot(cor_half, aes(x = Antigen1, y = Antigen2, fill = correlation)) +
+  geom_tile() +
+  scale_x_discrete(drop = FALSE) +
+  scale_y_discrete(drop = FALSE) +
+  scale_fill_gradient(low = "steelblue", high = "firebrick",
+                      limits = c(0, 1), oob = scales::squish,
+                      name = "Spearman\ncorrelation") +
+  coord_fixed() + 
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 10),
+    axis.text.y = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.title = element_blank()
+  )
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -558,107 +428,8 @@ plot_ratio_histogram <- function(res,
 }
 
 
-OLD_plot_ratio_histogram_homologous <- function(res,
-                                 label_fmt = "GM = %.2f",
-                                 ratio_label_fmt = "Ratio = %.2f",
-                                 bins = 10) {
- 
-  stopifnot(is.list(res), !is.null(res$plot_data), !is.null(res$mean_data))
- 
-  #diagonal -> geometric mean (GM)
-  gm_labels <- res$mean_data %>%
-    dplyr::filter(!is.na(gm), panel_type == "diagonal") %>%
-    mutate(label = sprintf(label_fmt, log2(gm)))
 
-  antigen_labeller <- as_labeller(fmt_antigen_multiline)
-  # diagonal data == GM 
-  # off diagonal data == (GM[current antigen] / GMp[infecting pathogen]) == relative ratio
-
-  # values are plotted on a log2 scale - 
-  # diagonal == log2(GM)
-  # off-diagonal == log2(relative ratio)
-  # if relative ratio > 1 --> cross reactive and log2(relative ratio) is pos else, log2(relative ratio) is neg
-  
-  # only want diagonal data for homologous antigens
-  diagonal_panel_data <- res$plot_data %>% dplyr::filter(panel_type == "diagonal")
-  
-  ggplot(diagonal_panel_data, aes(x = log2(value))) +
-    geom_histogram(bins = bins, alpha = 0.8, fill = "#e972a7",) +
-    geom_vline(xintercept = 0, colour = "red", linetype = "dashed",
-               linewidth = 0.5, alpha = 0.8) +
-    geom_label(
-      data          = gm_labels,
-      aes(label     = label),
-      x             = -Inf,
-      y             = Inf,
-      inherit.aes   = FALSE,
-      hjust         = -0.1,
-      vjust         = 2.3,
-      size          = 5,
-      fill          = "white",
-      label.padding = unit(0.15, "lines"),
-      label.size    = 0.3
-    )  + scale_y_continuous(name = "Count") +
-    facet_wrap(
-      vars(antigen),
-      ncol  = 5,
-      labeller = antigen_labeller,
-      strip.position = "top",  axes  = "all_x"   
-    )  +
-    theme_minimal() +
-    theme(
-      strip.text.x     = element_text(size = 20),
-      strip.text.y     = element_text(size = 20),
-      axis.line        = element_line(colour = "black", linewidth = 0.7),
-      panel.grid       = element_blank(),
-      panel.spacing    = unit(1, "lines"),
-      legend.position  = "none",
-      axis.text        = element_text(size = 20),
-      axis.title.x     = element_blank(),
-      axis.title.y     = element_text(size = 20),
-      panel.background = element_rect(fill = "#ffffff", colour = NA),
-      plot.background  = element_rect(fill = "white", colour = NA),
-      axis.ticks.x     = element_line(colour = "black", linewidth = 0.5),
-      axis.ticks.y     = element_line(colour = "black", linewidth = 0.5),
-      panel.border     = element_rect(colour = "black", fill = NA, linewidth = 0.3)
-    )
-}
-
-
-
-
-dir.create("Results/Fig3", showWarnings = FALSE)
-
-for (iso in names(ratio_dfs)) {
-  for (antigen in antigen_types) {
-
-    key <- paste(iso, antigen, sep = "_")   # composite key: nothing overwrites
-    message("Processing: ", key)
-
-    res <- prep_data(ratio_dfs[[iso]], antigen = antigen)
-    hist_p  <- plot_ratio_histogram(res)
-    forest_p <- plot_ratio_forest(res)
-
-    prep_data_list[[key]] <- res
-    histogram_list[[key]] <- hist_p
-    forest_list[[key]]    <- forest_p
-
-    n_row <- dplyr::n_distinct(res$plot_data$target_label)
-    n_col <- dplyr::n_distinct(res$plot_data$antigen)
-    tag   <- gsub("[^A-Za-z0-9_-]", "_", key)
-
-    ggsave(file.path("Results/Fig3", sprintf("hist_%s.png", tag)), hist_p,
-           width = n_col * 2.2 + 1, height = n_row * 2.2 + 1,
-           units = "in", limitsize = FALSE)
-
-    ggsave(file.path("Results/Fig3", sprintf("forest_%s.png", tag)), forest_p,
-           width = 13, height = 16, units = "in", limitsize = FALSE)
-  }
-}
-
-
-
-
+# testing gmean ratios 
 ratio_df_IgG <- readRDS("Data/by_isotype/ratio_df_IgG.rds")
 
 # DENV1 
@@ -674,10 +445,6 @@ denv1_pcr_pos_D111 <- Gmean(denv1_pcr_pos$DENV1_DIII, conf.level = 0.95)
 log2(denv1_pcr_pos_D111)
 denv1_pcr_pos_SHERPADES <- Gmean(denv1_pcr_pos$SHERPADES_DENV1_DIII, conf.level = 0.95)
 log2(denv1_pcr_pos_SHERPADES)
-
-
-
-
 
 
 denv1_pcr_pos_denv2_titres <- Gmean(denv1_pcr_pos$SHERPADES_DENV2_DIII)
@@ -728,118 +495,3 @@ logged_denv1_pcr_pos_denv3_titres / logged_denv1_pcr_pos_denv1_titres
 logged_denv1_pcr_pos_denv4_titres / logged_denv1_pcr_pos_denv1_titres
 
 
-
-heatmap_data <- mean_data %>%
-    mutate(log_odds = log2(gm))
-
-# heat map 
-heatmap <- ggplot(heatmap_data, aes(x = antigen, y = infecting_target, fill = log_odds)) +
-    geom_tile(color = "white", linewidth = 0.5) +
-    geom_text(aes(label = round(log_odds, 1)), size = 3.5, fontface = "bold") +
-    scale_fill_gradient2(
-      low      = "#024a9c",
-      mid      = "white",
-      high     = "#e972a7",
-      midpoint = 0,
-      limits   = c(-5, 5),
-      name     = "log2 odds\n(up/down)"
-    ) +
-    scale_x_discrete(
-      position = "top",
-      labels = function(x) case_when(
-      str_detect(x, "^SHERPADES_") ~ str_replace(x, "^SHERPADES_([^_]+)_DIII$", "SHERPADES\n\\1 DIII"),
-      str_detect(x, "^ZIKVAS_")    ~ "ZIKV\nDIII",
-      TRUE                         ~ str_replace(x, "_", "\n")
-    )) + 
-    scale_y_discrete(limits = rev) +
-    labs(x = "Antigen", y = "Infecting pathogen") +
-    theme_minimal(base_size = 12) +
-    theme(
-      axis.text.x      = element_text(size = 16),
-      axis.text.y      = element_text(size = 16),
-      axis.title       = element_text(size = 16),
-      legend.title     = element_text(size = 16),
-      legend.text      = element_text(size = 16),
-      panel.grid       = element_blank(),
-      plot.background  = element_rect(fill = "white", color = NA),
-      panel.background = element_rect(fill = "white", color = NA)
-    )
-
-
-
-
-
-# This function computes summary statistics for ZIKV cross-reactivity ratios
-# across all DENV-infected samples (DENV1-4).
-# For each DENV-infected group, we calculate the ratio:
-#   ZIKV antigen signal / infecting DENV antigen signal
-# This tells us how strongly DENV-infected patients' antibodies
-# cross-react with ZIKV antigen, relative to their own infecting virus.
-# All ratios from DENV1, DENV2, DENV3, and DENV4 infected groups are
-# pooled together, since there is only one ZIKV-infected sample —
-# not enough to compute meaningful within-group statistics.
-# Output: mean, IQR, min/max, and proportion of ratios above/below 1
-#   ratio < 1 → weaker reaction to ZIKV than to infecting DENV serotype
-#   ratio = 1 → equal cross-reactivity
-#   ratio > 1 → stronger reaction to ZIKV than to infecting DENV serotype
-
-
-
-compute_zikv_column_stats <- function(data, antigen_suffix, flavi_targets = pcr_target) {
-  
-  all_zikv_ratios <- c()
-       # Map antigen names to column prefixes for specific suffixes
-    antigen_col_map <- list(
-      DIII = c(DENV1 = "DENV1", DENV2 = "DENV2", DENV3 = "DENV3", DENV4 = "DENV4", ZIKV = "ZIKVAS")
-    )
-
-    get_col_name <- function(antigen, suffix) {
-    if (suffix %in% names(antigen_col_map) && antigen %in% names(antigen_col_map[[suffix]])) {
-      paste0(antigen_col_map[[suffix]][[antigen]], "_", suffix)
-    } else {
-      paste0(antigen, "_", suffix)
-    }
-  }
-  
-  # Loop through all non-ZIKV infecting targets (off-diagonal ZIKV column)
-  for (infecting_target in flavi_targets[flavi_targets != "ZIKV"]) {
-    
-    target_data <- data %>% filter(target == infecting_target)
-    
-    infecting_col <- get_col_name(infecting_target, antigen_suffix)
-    zikv_col      <- get_col_name("ZIKV", antigen_suffix)  # "ZIKVAS_DIII"
-    
-    valid_rows <- complete.cases(target_data[, c(infecting_col, zikv_col)])
-    
-    if (sum(valid_rows) > 0) {
-      relative_ratios <- target_data[valid_rows, zikv_col] / target_data[valid_rows, infecting_col]
-      all_zikv_ratios <- c(all_zikv_ratios, relative_ratios)
-    }
-  }
-  
-  # --- Summary statistics ---
-  if (length(all_zikv_ratios) > 0) {
-    
-    overall_mean <- mean(all_zikv_ratios, na.rm = TRUE)
-    overall_q25  <- quantile(all_zikv_ratios, 0.25, na.rm = TRUE)
-    overall_q75  <- quantile(all_zikv_ratios, 0.75, na.rm = TRUE)
-    overall_iqr  <- overall_q75 - overall_q25
-    
-    below_1 <- sum(all_zikv_ratios < 1, na.rm = TRUE)
-    above_1 <- sum(all_zikv_ratios > 1, na.rm = TRUE)
-    n       <- length(all_zikv_ratios)
-    
-    cat("\nOVERALL LAST COLUMN STATISTICS (All DENV-ZIKV comparisons):\n")
-    cat(sprintf("Total samples: %d\n",        n))
-    cat(sprintf("Mean: %.3f\n",               overall_mean))
-    cat(sprintf("IQR: %.3f - %.3f (range: %.3f)\n", overall_q25, overall_q75, overall_iqr))
-    cat(sprintf("Min: %.3f\n",                min(all_zikv_ratios)))
-    cat(sprintf("Max: %.3f\n",                max(all_zikv_ratios)))
-    cat(sprintf("Values < 1.0: %d/%d (%.1f%%)\n", below_1, n, 100 * below_1 / n))
-    cat(sprintf("Values > 1.0: %d/%d (%.1f%%)\n", above_1, n, 100 * above_1 / n))
-  }
-}
-
-compute_zikv_column_stats(ratio_df, "VLP")
-compute_zikv_column_stats(ratio_df, "NS1")
-compute_zikv_column_stats(ratio_df, "DIII")
