@@ -21,7 +21,6 @@ library(patchwork)
 library(tidyverse)
 library(standardize)
 
-
 #--- source functions
 source(here('/Users/ap2488/Documents/GitHub/luminex_data_supervised_classification/Functions.R'))
 
@@ -82,25 +81,9 @@ prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pr
     as.data.frame()
   
 
-
-  # Dataset 2: Last draw (ie draw at max days since infection)
-  cross_sectional_data <-raw_data %>%
-    filter(!is.na(days_since_infection)) %>%   # drop unconfirmed-infection patients up front
-    group_by(id_patient) %>%
-    slice_max(days_since_infection, n = 1, with_ties = FALSE) %>% # pick first date if max(days_since_infection)is duplicated
-    ungroup() %>%
-    # Keep only selected antigen columns
-    dplyr::select(id_patient, all_of(antigen_cols)) %>%
-    # Add target
-    left_join(patient_mapping, by = "id_patient") %>%
-    na.omit() %>%
-    as.data.frame()
-  
- 
   # Return both datasets
   return(list(
-    ratio = ratio_df,
-    cross_sectional_data = cross_sectional_data
+    ratio = ratio_df
   ))
 }
 
@@ -139,6 +122,11 @@ cpc_gps <- read.csv(here("Data/CPC_GPS.csv"))
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
 
+
+unique(cebu_mutiple_antigens$antigen)
+
+# using ZIKVAS_DIII as ZIKV_DIII
+# for ZIKA NS1 using ZIKV_NS1 (not using - ZIKVSU_NS1)
 cebu_mutiple_antigens <- cebu_mutiple_antigens %>%
   mutate(antigen = dplyr::recode(antigen, "ZIKVAS_DIII" = "ZIKV_DIII"))
 
@@ -149,8 +137,6 @@ cebu_pivot <- cebu_mutiple_antigens %>%
     names_from = antigen,
     values_from = RAU
   )
-
-
 
 
 # --- Add col: days_since_infection 
@@ -168,6 +154,7 @@ cebu_pivot_days_since_inf <- cebu_pivot %>%
   ) %>%
   ungroup() %>%
   dplyr::select(-first_positive_date, -first_negative_date)
+
 
 
 # patients with no PCR sample at all -> days_since_infection is NA throughout
@@ -192,17 +179,16 @@ dplyr::count(pcr_history, has_symptomatic_denv, has_symptomatic_chik)
 # isotype-long subsets
 no_denv_pcr  <- cebu_pivot_days_since_inf %>%
   semi_join(filter(pcr_history, !has_symptomatic_denv), by = "id_patient")
- 
+
 no_chikv_pcr <- cebu_pivot_days_since_inf %>%
   semi_join(filter(pcr_history, !has_symptomatic_chik), by = "id_patient")
  
 n_distinct(no_denv_pcr$id_patient)    # patients with no DENV +ve PCR during study 
 n_distinct(no_chikv_pcr$id_patient)   # patients with no CHIKV +ve PCR during study 
- 
+
 
 # get one sample per patient for HAI and PRNT 
 # rather than duplicated, which is the case in original data because we have 4 isotypes per sample)
-
 sample_per_patient <- function(df) {
   out <- df %>%
     dplyr::mutate(
@@ -224,8 +210,9 @@ sample_per_patient <- function(df) {
   out
 }
 
-# only need this for no PCR denv and CHIKV  
-denv_HAIs <- sample_per_patient(no_denv_pcr)
+
+
+denv_HAIs  <- sample_per_patient(no_denv_pcr)
 chik_PRNTs <- sample_per_patient(no_chikv_pcr)
 
 
@@ -389,11 +376,10 @@ preprocessed_by_isotype <- map(set_names(isotypes), function(iso) {
 
   saveRDS(dfs$ratio,  sprintf("Data/by_isotype/ratio_df_%s.rds", iso))
   saveRDS(logged_ratio,  sprintf("Data/by_isotype/logged_ratio_df_%s.rds", iso))
-  saveRDS(dfs$cross_sectional_data, sprintf("Data/by_isotype/cross_sectional_df_%s.rds", iso))
 
 
   list(raw = raw_iso, log = log_iso,
-       ratio = dfs$ratio, logged_ratio = logged_ratio, cross_sectional = dfs$cross_sectional_data)
+       ratio = dfs$ratio, logged_ratio = logged_ratio)
 })
 
 saveRDS(preprocessed_by_isotype, "Data/by_isotype/preprocessed_by_isotype.rds")
@@ -402,7 +388,7 @@ saveRDS(preprocessed_by_isotype, "Data/by_isotype/preprocessed_by_isotype.rds")
 igg_ratio <- readRDS("Data/by_isotype/ratio_df_IgG.rds")
 iga_ratio <- readRDS("Data/by_isotype/ratio_df_IgA.rds")
 igm_ratio <- readRDS("Data/by_isotype/ratio_df_IgM.rds")
-colnames(igg_ratio)
+
 
 
 

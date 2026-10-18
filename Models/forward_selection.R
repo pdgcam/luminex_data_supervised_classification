@@ -45,16 +45,19 @@ source(here('Functions.R'))
     ))
   }
 
-  direction <- .metric_direction[[metric]]
+  direction <- unname(.metric_direction[metric])
   if (is.null(direction)) direction <- "max"  # sensible fallback for unknown metrics
 
   df <- comparison_df
   if (!is.null(model)) {
-    df <- df[df$Model == model, , drop = FALSE]
+    if (!"model_key" %in% names(df)) {
+      stop("comparison data has no 'model_key' column - cannot pin selection to a model.")
+    }
+    df <- df[df$model_key == model, , drop = FALSE]
     if (nrow(df) == 0) {
       stop(sprintf(
         "Model '%s' not found among trained models (available: %s)",
-        model, paste(unique(comparison_df$Model), collapse = ", ")
+        model, paste(unique(comparison_df$model_key), collapse = ", ")
       ))
     }
   }
@@ -63,10 +66,8 @@ source(here('Functions.R'))
   if (all(is.na(vals))) return(list(value = NA_real_, model = NA_character_))
 
   best_idx <- if (direction == "max") which.max(vals) else which.min(vals)
-  list(value = vals[best_idx], model = df$Model[best_idx])
+  list(value = vals[best_idx], model = df$model_key[best_idx])
 }
-
-
 
 
 
@@ -75,11 +76,12 @@ forward_selection <- function(
     target,
     variables,
     positive_class = NULL,
-    metrics = c("ROC", "AUPRC", "Brier"),
+    metrics = NULL,
     selection_metric = "auto",
-    selection_model = NULL,
+    selection_model = "glmnet",
     max_vars = NULL,
-    min_improvement = 0) {
+    min_improvement = 0,
+    seed = 42) {
  
   # ---- Input validation (mirrors train_binary_models) ----
   if (!target %in% names(data)) {
@@ -90,18 +92,35 @@ forward_selection <- function(
   if (length(missing_vars) > 0) {
     stop(paste("Variables not found in data:", paste(missing_vars, collapse = ", ")))
   }
- 
-  n_classes <- length(unique(data[[target]]))
+
+  variables <- unique(variables)
+
+  keep <- stats::complete.cases(data[, c(target, variables), drop = FALSE])
+  if (sum(!keep) > 0) {
+    cat(sprintf("Dropping %d row(s) with missing values across target/variables.\n", sum(!keep)))
+    data <- data[keep, , drop = FALSE]
+  }
+
+
+  n_classes <- length(unique(stats::na.omit(data[[target]])))
  
   # Resolve which metric ranks candidates
   target_selection_metric <- selection_metric
   if (identical(selection_metric, "auto")) {
     target_selection_metric <- if (n_classes == 2) "ROC" else "AUC_Micro"
   }
+
+  if (is.null(metrics)) {
+    metrics <- if (n_classes == 2) {
+      c("ROC", "AUPRC", "Brier")
+    } else {
+      c("Accuracy", "AUC_Macro", "AUC_Micro", "Brier")
+    }
+  }
   cat(sprintf("Ranking candidates by: %s\n", target_selection_metric))
  
-  direction   <- .metric_direction[[target_selection_metric]]
-  if (is.null(direction)) direction <- "max"
+  direction <- unname(.metric_direction[target_selection_metric])
+  if (is.na(direction)) direction <- "max"
   best_so_far <- if (direction == "max") -Inf else Inf
  
   remaining <- variables
@@ -142,7 +161,6 @@ forward_selection <- function(
             variables      = trial_vars,
             positive_class = positive_class,
             metrics        = metrics, 
-            #cv_repeats      = 10, 
             fold_index      = fold_index
           )
         } else {
@@ -150,7 +168,6 @@ forward_selection <- function(
             data       = data,
             target     = target,
             variables  = trial_vars,
-            univariate = FALSE,   # n_predictors==1 still forces decision-tree-only
             metrics    = metrics
           )
         }
@@ -241,6 +258,14 @@ forward_selection <- function(
   )
 }
  
+
+
+
+
+
+
+
+
 
 
 # ------ OLD CODE -------

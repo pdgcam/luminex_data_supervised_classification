@@ -11,11 +11,11 @@ library(ggrepel)
 library(DALEX)
 library(reshape2)   # for melt
 library(scales)
+library(here)
 # --- Source functions
-source(here('Models/train_binary_models.R'))
+source(here('Models/NEW_train_binary_models.R'))
 source(here('Models/train_multinomial_models.R'))
-source(here('Functions.R'))
-source(here('Models/forward_selection.R'))
+source(here('Models/RF_forward_selection.R'))
 
 load_binary_result <- function(comparison, isotype, dataset_type) {
   path <- file.path("Results", "Binary_Classification", dataset_type,
@@ -73,7 +73,7 @@ extract_varimp <- function(fit_result, model_name, n_permutations = 50) {
 
 
 dataset_types <- c("ratio", "cross_sectional") 
-isotypes <- c("IgG", "IgA", "IgM", "avidity")
+isotypes <- c("IgG", "IgA", "IgM")
 
 feature_importance_list <- list()
 
@@ -213,10 +213,9 @@ shap_imps <- bind_rows(shap_imps)
 # --- Source functions
 source(here('Models/train_binary_models.R'))
 source(here('Models/train_multinomial_models.R'))
-source(here('Functions.R'))
+source(here('Models/RF_forward_selection.R'))
 
-
-isotypes <- c("IgG", "IgA", "IgM", "avidity")
+isotypes <- c("IgG", "IgA", "IgM")
 
 flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
 "DENV2_DIII","DENV2_NS1","DENV2_VLP","SHERPADES_DENV2_DIII",
@@ -225,254 +224,278 @@ flavi_antigens <- c("DENV1_DIII","DENV1_NS1","DENV1_VLP","SHERPADES_DENV1_DIII",
 "JEV_E", "JEV_NS1", "SHERPADES_JEV_DIII",
 "YFV_E", "YFV_NS1", "SHERPADES_YFV_DIII",
 "WNV_DIII","WNV_NS1","SHERPADES_WNV_DIII",
-"ZIKV_NS1","ZIKV_VLP","ZIKVAS_DIII","ZIKVSU_NS1","SHERPADES_ZIKV_DIII")
+"ZIKV_NS1","ZIKV_VLP","ZIKV_DIII","ZIKVSU_NS1","SHERPADES_ZIKV_DIII")
 
-length(flavi_antigens) # 30 antigens
+alpha_antigens <- c("CHIKV_E2", "CHIKV_NSP123", "CHIKV_VLP", "SHERPADES_CHIKV_E2", 
+                    "MAYV_E2" , "SHERPADES_MAYV_E2",
+                    "ONNV_E2", "ONNV_VLP",
+                    "RR" , "SHERPADES_RR")
+
+
 
 #  Read: Flavi vs not (binary) and dengue serotype (multinomial) forward selection
 
 data_with_binomial_targets_flavi_list <- readRDS(here("Data", "model_prepared", "data_with_binomial_targets_flavi_list.rds"))
+data_with_binomial_targets_chik_list <- readRDS(here("Data", "model_prepared", "data_with_binomial_targets_chik_list.rds"))
 data_with_multinomial_targets_list <- readRDS(here("Data", "model_prepared", "data_with_multinomial_targets_list.rds"))
 
 
+# ratio binomial 
 ratio_IgG_flavi_vs_not <- data_with_binomial_targets_flavi_list$ratio$IgG$data$flavi
-ratio_IgA_flavi_vs_not <- data_with_binomial_targets_flavi_list$ratio$IgA$data$flavi
-ratio_IgM_flavi_vs_not <- data_with_binomial_targets_flavi_list$ratio$IgM$data$flavi
-ratio_avidity_flavi_vs_not <- data_with_binomial_targets_flavi_list$ratio$avidity$data$flavi
+ratio_IgG_dengue_vs_not <- data_with_binomial_targets_flavi_list$ratio$IgG$data$dengue
+ratio_IgG_chik_vs_not <- data_with_binomial_targets_chik_list$ratio$IgG$data$chik
+# cross-sectional binomial 
+cs_IgG_flavi_vs_not <- data_with_binomial_targets_flavi_list$cross_sectional$IgG$data$flavi
+cs_IgG_dengue_vs_not <- data_with_binomial_targets_flavi_list$cross_sectional$IgG$data$dengue
+cs_IgG_chik_vs_not <- data_with_binomial_targets_chik_list$cross_sectional$IgG$data$chik
 
 
+# ratio multinomial 
 ratio_IgG_dengue_serotype <- data_with_multinomial_targets_list$ratio$IgG$data$dengue_serotype
-ratio_IgA_dengue_serotype <- data_with_multinomial_targets_list$ratio$IgA$data$dengue_serotype
-ratio_IgM_dengue_serotype <- data_with_multinomial_targets_list$ratio$IgM$data$dengue_serotype
-ratio_avidity_dengue_serotype <- data_with_multinomial_targets_list$ratio$avidity$data$dengue_serotype
+# cross-sectional binomial 
+cs_IgG_dengue_serotype <- data_with_multinomial_targets_list$cross_sectional$IgG$data$dengue_serotype
+
+# forward selection - only Random Forest 
+# ---- Positive classes -------------------------------------------------------
+pc_ratio_flavi  <- data_with_binomial_targets_flavi_list$ratio$IgG$positive_class_map$flavi
+pc_ratio_dengue <- data_with_binomial_targets_flavi_list$ratio$IgG$positive_class_map$dengue
+pc_ratio_chik   <- data_with_binomial_targets_chik_list$ratio$IgG$positive_class_map$chik
+ 
+pc_cs_flavi     <- data_with_binomial_targets_flavi_list$cross_sectional$IgG$positive_class_map$flavi
+pc_cs_dengue    <- data_with_binomial_targets_flavi_list$cross_sectional$IgG$positive_class_map$dengue
+pc_cs_chik      <- data_with_binomial_targets_chik_list$cross_sectional$IgG$positive_class_map$chik
+
+
+# =============================================================================
+# RATIO
+# =============================================================================
+
+forward_selection_ratio_IgG_flavi_vs_not <- forward_selection_rf(
+  data             = ratio_IgG_flavi_vs_not,
+  target           = "flavi_target",
+  variables        = flavi_antigens,
+  positive_class   = pc_ratio_flavi,
+  metrics          = c("ROC", "AUPRC", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+ 
+forward_selection_ratio_IgG_dengue_vs_not <- forward_selection_rf(
+  data             = ratio_IgG_dengue_vs_not,   # was ratio_IgG_dengue_serotype - see note
+  target           = "dengue_target",
+  variables        = flavi_antigens,
+  positive_class   = pc_ratio_dengue,
+  metrics          = c("ROC", "AUPRC", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+ 
+forward_selection_ratio_IgG_chik_vs_not <- forward_selection_rf(
+  data             = ratio_IgG_chik_vs_not,
+  target           = "chik_target",
+  variables        = alpha_antigens,
+  positive_class   = pc_ratio_chik,
+  metrics          = c("ROC", "AUPRC", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+ 
+forward_selection_ratio_IgG_dengue_serotype <- forward_selection_rf(
+  data             = ratio_IgG_dengue_serotype,
+  target           = "dengue_serotype_target",
+  variables        = flavi_antigens,
+  metrics          = c("AUC_Macro", "AUC_Micro", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+ 
+ 
+# =============================================================================
+# CROSS-SECTIONAL
+# =============================================================================
+ 
+forward_selection_cs_IgG_flavi_vs_not <- forward_selection_rf(
+  data             = cs_IgG_flavi_vs_not,
+  target           = "flavi_target",
+  variables        = flavi_antigens,
+  positive_class   = pc_cs_flavi,
+  metrics          = c("ROC", "AUPRC", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+
+forward_selection_cs_IgG_dengue_vs_not <- forward_selection_rf(
+  data             = cs_IgG_dengue_vs_not,
+  target           = "dengue_target",
+  variables        = flavi_antigens,
+  positive_class   = pc_cs_dengue,
+  metrics          = c("ROC", "AUPRC", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+
+cs_IgG_chik_vs_not
+
+forward_selection_cs_IgG_chik_vs_not <- forward_selection_rf(
+  data             = cs_IgG_chik_vs_not,
+  target           = "chik_target",
+  variables        = alpha_antigens,
+  positive_class   = pc_cs_chik,
+  metrics          = c("ROC", "AUPRC", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
+ 
+forward_selection_cs_IgG_dengue_serotype <- forward_selection_rf(
+  data             = cs_IgG_dengue_serotype,
+  target           = "dengue_serotype_target",
+  variables        = flavi_antigens,
+  metrics          = c("AUC_Macro", "AUC_Micro", "Brier"),
+  selection_metric = "auto",
+  max_vars         = NULL,
+  min_improvement  = -Inf
+)
 
 
 
 
-forward_selection_ratio_IgG_flavi_vs_not<- forward_selection(
-   data  = ratio_IgG_flavi_vs_not,
-   variables  = flavi_antigens,
-   target  = "flavi_target",
-   positive_class = data_with_binomial_targets_flavi_list$ratio$IgG$positive_class_map$flavi,
-   metrics   = c("ROC", "AUPRC", "Brier"),
-   selection_metric = "auto",    
-   selection_model  = NULL,      
-   max_vars   = NULL,      
-   min_improvement  = -Inf          
- )
 
-names(foward_selection_ratio_IgG_flavi_vs_not)
+# ---- NEW RANDOM FOREST CS FORWARD SELECTION 
+fs <- forward_selection_rf(binom_flavi$data$dengue, "dengue_target",
+                           variables = setdiff(names(binom_flavi$data$dengue), c("dengue_target", "id_patient")),
+                           positive_class = binom_flavi$positive_class_map$dengue)
 
 
-forward_selection_ratio_IgG_flavi_vs_not$selected_vars
-forward_selection_ratio_IgG_flavi_vs_not$combined_steps                 # step-by-step performance (winner only)
-forward_selection_ratio_IgG_flavi_vs_not$combined_candidates            # every candidate tried at every step
+
+fs_chik <- forward_selection_rf(cs_IgG_chik_vs_not, "chik_target",
+                           variables = setdiff(names(cs_IgG_chik_vs_not$chik_target), c("chik_target", "id_patient")),
+                           positive_class = pc_cs_chik)
+
+dir.create(file.path("Results", "NEW_RF_Forward_Selection"), recursive = TRUE, showWarnings = FALSE)
 
 
-names(forward_selection_ratio_IgG_flavi_vs_notforward_selection_ratio_IgG_flavi_vs_not)
 
-forward_selection_ratio_IgG_flavi_vs_not$combined_steps
+saveRDS(
+  fs,
+  here("Results", "NEW_RF_Forward_Selection",
+       "forward_selection_cs_IgG_dengue_vs_not.rds")
+)
 
 
-plot_forward_selection <- function(forward_results,
-                                    metric = NULL,
-                                    target = NULL,
-                                    spread = c("sd", "range", "none"),
-                                    show_models = FALSE) {
-  
+ 
+# read forward selection 
+forward_selection_ratio_IgG_flavi_vs_not <- readRDS(here('Results/Forward_Selection/forward_selection_ratio_IgG_flavi_vs_not.rds'))
+forward_selection_ratio_IgG_dengue_vs_not <- readRDS(here('Results/Forward_Selection/forward_selection_ratio_IgG_dengue_vs_not.rds'))
+forward_selection_ratio_IgG_chik_vs_not <- readRDS(here('Results/Forward_Selection/forward_selection_ratio_IgG_chik_vs_not.rds'))
+
+
+forward_selection_cs_IgG_dengue_vs_not <- readRDS(here('Results/RF_Forward_Selection/forward_selection_cs_IgG_dengue_vs_not.rds'))
+
+
+forward_selection_cs_IgG_flavi_vs_not <- readRDS(
+  here("Results", "RF_Forward_Selection",
+       "forward_selection_cs_IgG_flavi_vs_not.rds"))
+ 
+forward_selection_cs_IgG_dengue_vs_not <- readRDS(
+  here("Results", "RF_Forward_Selection",
+       "forward_selection_cs_IgG_dengue_vs_not.rds"))
+ 
+forward_selection_cs_IgG_chik_vs_not <- readRDS(
+  here("Results", "RF_Forward_Selection",
+       "forward_selection_cs_IgG_chik_vs_not.rds"))
+ 
+forward_selection_cs_IgG_dengue_serotype <- readRDS(
+  here("Results", "RF_Forward_Selection",
+       "forward_selection_cs_IgG_dengue_serotype.rds"))
+ 
+
+plot_forward_selection_rf <- function(forward_results,
+                                      metric = NULL,
+                                      target = NULL,
+                                      spread = c("sd", "none")) {
+
   spread <- match.arg(spread)
 
   df <- forward_results$combined_steps
   if (nrow(df) == 0) stop("combined_steps is empty -- nothing to plot.")
 
   if (is.null(metric)) metric <- forward_results$selection_metric_used
-  if (identical(metric, "auto")) {
-    stop("selection_metric was 'auto' (differs by target type) -- please pass `metric` explicitly, e.g. metric = 'ROC' or metric = 'AUC_Micro'.")
-  }
-
   if (!is.null(target)) df <- df[df$target == target, ]
 
   if (!metric %in% names(df)) {
-    stop(sprintf("Metric '%s' not present in results. Available metric columns: %s",
+    stop(sprintf("Metric '%s' not present in results. Available: %s",
                  metric,
-                 paste(setdiff(names(df),
-                               c("target", "step", "set_size", "variable_added",
-                                 "selected_set", "Model", "candidate_variable",
-                                 "engine")),
-                       collapse = ", ")))
+                 paste(grep("_sd$", setdiff(names(df),
+                       c("target", "step", "set_size", "variable_added",
+                         "selected_set", "model_key", "Model",
+                         "candidate_variable")),
+                       value = TRUE, invert = TRUE), collapse = ", ")))
   }
 
-  # ---- Average across models within each step ----
-  ens <- df %>%
-    dplyr::group_by(target, step, set_size, variable_added) %>%
-    dplyr::summarise(
-      mean_metric = mean(.data[[metric]], na.rm = TRUE),
-      sd_metric   = stats::sd(.data[[metric]], na.rm = TRUE),
-      min_metric  = min(.data[[metric]], na.rm = TRUE),
-      max_metric  = max(.data[[metric]], na.rm = TRUE),
-      n_models    = sum(!is.na(.data[[metric]])),
-      models_used = paste(sort(Model[!is.na(.data[[metric]])]), collapse = ", "),
-      .groups = "drop"
-    ) %>%
-    dplyr::arrange(target, step)
-
-  # sd is NA when only one model contributed -- treat as zero width
-  ens$sd_metric[is.na(ens$sd_metric)] <- 0
-
-  if (any(ens$n_models != max(ens$n_models))) {
-    warning(paste0(
-      "Number of models differs between steps (",
-      paste(sort(unique(ens$n_models)), collapse = " vs "),
-      "). The mean is then taken over different model sets, so steps are not ",
-      "strictly comparable -- check `models_used` in the returned data."
-    ))
+  sd_col <- paste0(metric, "_sd")
+  has_sd <- spread == "sd" && sd_col %in% names(df)
+  if (spread == "sd" && !has_sd) {
+    warning(sprintf("No '%s' column - drawing the line without a ribbon.", sd_col))
   }
 
-  ens$step_label <- factor(
-    paste0(ens$step, ". +", ens$variable_added),
-    levels = unique(paste0(ens$step, ". +", ens$variable_added))
-  )
-
-  # ---- Build plot ----
-  p <- ggplot2::ggplot(ens, ggplot2::aes(x = step_label, y = mean_metric, group = target))
-
-  # faint per-model curves underneath, if asked for
-  if (show_models) {
-    df_models <- df
-    df_models$step_label <- factor(
-      paste0(df_models$step, ". +", df_models$variable_added),
-      levels = levels(ens$step_label)
+  # one row per step (RF only), so just order and label
+  df <- df %>%
+    dplyr::arrange(target, step) %>%
+    dplyr::mutate(
+      value      = .data[[metric]],
+      sd_value   = if (has_sd) .data[[sd_col]] else 0,
+      step_label = factor(paste0(step, ". +", variable_added),
+                          levels = unique(paste0(step, ". +", variable_added)))
     )
-    p <- p + ggplot2::geom_line(
-      data = df_models,
-      ggplot2::aes(x = step_label, y = .data[[metric]], group = Model),
-      inherit.aes = FALSE,
-      colour = "grey70", linewidth = 0.4, alpha = 0.8
-    )
-  }
 
-  if (spread == "sd") {
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = step_label, y = value, group = target))
+
+  if (has_sd) {
     p <- p + ggplot2::geom_ribbon(
-      ggplot2::aes(ymin = mean_metric - sd_metric, ymax = mean_metric + sd_metric),
-      fill = "steelblue", alpha = 0.20
-    )
-  } else if (spread == "range") {
-    p <- p + ggplot2::geom_ribbon(
-      ggplot2::aes(ymin = min_metric, ymax = max_metric),
-      fill = "steelblue", alpha = 0.20
-    )
+      ggplot2::aes(ymin = value - sd_value, ymax = value + sd_value),
+      fill = "steelblue", alpha = 0.20)
   }
-
-  ribbon_label <- switch(spread,
-    sd    = "ribbon = +/- 1 SD across models",
-    range = "ribbon = min-max across models",
-    none  = NULL
-  )
 
   p <- p +
     ggplot2::geom_line(linewidth = 0.9, colour = "steelblue4") +
     ggplot2::geom_point(size = 2, colour = "steelblue4") +
     ggplot2::labs(
-      x        = "Antigen added (cumulative)",
-      y        = paste0("Mean ", metric, " across models"),
-      title    = paste("Forward selection -- ensemble mean", metric),
-      subtitle = ribbon_label
-    ) +
+      x        = "Antigen added",
+      y        = metric,
+      title    = paste("Forward selection (Random Forest) ", metric),
+      subtitle = if (has_sd) "ribbon = +/- 1 SD across resamples" else NULL) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
-  if (length(unique(ens$target)) > 1) {
+  if (length(unique(df$target)) > 1) {
     p <- p + ggplot2::facet_wrap(~ target, scales = "free_x")
   }
 
-  # attach the aggregated table so you can inspect / export the numbers
-  attr(p, "ensemble_data") <- ens
+  attr(p, "plot_data") <- df
   p
 }
 
+
+# ---- Usage ------------------------------------------------------------------
+# plot_forward_selection_rf(forward_selection_cs_IgG_flavi_vs_not)
+
+
+
 quartz()
-plot_forward_selection(forward_selection_ratio_IgG_flavi_vs_not, metric = "ROC")
+p <- plot_forward_selection_rf(fs, metric = "ROC")
+ggplot2::ggsave(here("Results/NEW_RF_Forward_Selection/forward_selection_roc.png"),
+                p, width = 12, height = 6, dpi = 300)
+
+quartz()
+plot_forward_selection(forward_selection_ratio_IgG_chik_vs_not, metric = "ROC")
+quartz()
+plot_forward_selection(forward_selection_ratio_IgG_dengue_serotype, metric = "AUC_Macro")
 
 
-set.seed(42)
-fold_index <- caret::createMultiFolds(
-  factor(ratio_IgG_flavi_vs_not$flavi_target),   # use your actual target column
-  k = 5, times = 10
-)
-
-length(fold_index)   # expect 50
-
-
-
-
-# does WVN really work that well??
-chk <- train_binary_models(
-  data = ratio_IgG_flavi_vs_not, target = "flavi_target",
-  variables = c("WNV_NS1", "YFV_E", "SHERPADES_YFV_DIII"), positive_class = "positive",
-  fold_index = fold_index
-)
-
-chk$comparison
-
-
-
-
-dat  <- antigen_data_ratio_IgG_flavi_vs_not
-keep <- flavi_antigens
-
-pairs_df <- t(combn(keep, 2)) |> as.data.frame() |>
-  setNames(c("a", "b"))
-
-long <- lapply(seq_len(nrow(pairs_df)), function(i) {
-  a <- pairs_df$a[i]; b <- pairs_df$b[i]
-  data.frame(pair = paste(a, "vs", b), x = dat[[a]], y = dat[[b]])
-}) |> bind_rows()
-
-long$pair <- factor(long$pair, levels = unique(long$pair))  # keeps combn order
-
-
-antigen_pairs <- ggplot(long, aes(x, y)) +
-  geom_point(size = 0.4, alpha = 0.4) +
-  facet_wrap(~ pair, scales = "free", ncol = 12) +
-  theme_minimal(base_size = 6) +
-  theme(strip.text = element_text(size = 4), axis.title = element_blank())
-
-
-ggsave(here::here("Results/antigen_pairs.pdf"), antigen_pairs,
-       width = 30, height = 60, limitsize = FALSE)
-
-
-
-
-# OLD
-
-
-ggplot(igg_backward_avg$drop_df, aes(x = reorder(antigen_dropped, avg_AUC), y = avg_AUC)) +
-  geom_point(aes(color = delta_AUC), size = 3) +
-  geom_errorbar(aes(ymin = avg_AUC - sd_AUC, ymax = avg_AUC + sd_AUC), width = 0.2, alpha = 0.4) +
-  geom_hline(yintercept = igg_backward_avg$baseline_avg_auc, linetype = "dashed", color = "red") +
-  scale_color_gradient2(low = "firebrick", mid = "grey80", high = "steelblue", midpoint = 0,
-                         name = "Δ AUC\n(vs baseline)") +
-  coord_flip() +
-  labs(
-    title    = "Backward Selection (avg AUC across models)",
-    subtitle = "Dashed red line = baseline avg AUC (from saved model); error bars = SD across the 4 models",
-    x = "Antigen Dropped", y = "Mean AUC across models (model without this antigen)"
-  ) +
-  theme_bw()
-
-
-igg_backward <- backward_selection_single_drop(dataset_type = "ratio", isotype = "IgG")
-
-ggplot(igg_backward$drop_df, aes(x = reorder(antigen_dropped, AUC), y = AUC)) +
-  geom_point(aes(color = delta_AUC), size = 3) +
-  geom_hline(yintercept = igg_backward$baseline_auc, linetype = "dashed", color = "red") +
-  scale_color_gradient2(low = "firebrick", mid = "grey80", high = "steelblue", midpoint = 0,
-                         name = "Δ AUC\n(vs baseline)") +
-  coord_flip() +
-  labs(
-    title    = "Backward Selection: Effect of Dropping Each Antigen (IgG, Dengue vs Not)",
-    subtitle = "Dashed red line = baseline AUC with all antigens included",
-    x = "Antigen Dropped", y = "AUC (model without this antigen)"
-  ) +
-  theme_bw()

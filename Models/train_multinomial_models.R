@@ -1,9 +1,9 @@
-  # ---- Multinomial analysis ----
+ # ---- Multinomial analysis ----
 train_multinomial_models <- function(
     data,
     target,
     variables = NULL,
-    metrics = c("ROC", "AUPRC", "Brier", "StratBrier")) {
+    metrics = c("AUC_Macro", "AUC_Micro", "AUPRC_Macro", "Brier", "StratBrier")) {
 
   # ---- Input Validation ----
   if (!target %in% names(data)) {
@@ -19,7 +19,9 @@ train_multinomial_models <- function(
     }
   }
 
-  valid_metrics <- c("ROC", "AUPRC", "Brier", "StratBrier", "logLoss")
+   valid_metrics <- c("Accuracy", "AUC_Macro", "AUC_Micro",
+                     "AUPRC_Macro", "AUPRC_Micro", "Brier", "StratBrier")
+
   invalid_metrics <- setdiff(metrics, valid_metrics)
   if (length(invalid_metrics) > 0) {
     stop(paste("Invalid metrics:", paste(invalid_metrics, collapse = ", "),
@@ -28,7 +30,8 @@ train_multinomial_models <- function(
 
   # ---- Prepare Data ----
   model_data <- data[, c(variables, target)]
-  n_predictors <- ncol(model_data) - 1
+  n_predictors <- length(variables)
+  id_lookup <- if ("id_patient" %in% names(data)) as.character(data[["id_patient"]]) else NULL
 
   if ("id_patient" %in% names(data)) {
     rownames(model_data) <- data[["id_patient"]]
@@ -36,8 +39,9 @@ train_multinomial_models <- function(
 
   # Ensure target is a factor
   if (!is.factor(model_data[[target]])) {
-    model_data[[target]] <- as.factor(model_data[[target]])
+    model_data[[target]] <- factor(model_data[[target]])
   }
+  levels(model_data[[target]]) <- make.names(levels(model_data[[target]]))
 
   class_levels <- levels(model_data[[target]])
   n_classes    <- length(class_levels)
@@ -46,13 +50,14 @@ train_multinomial_models <- function(
   cat(sprintf("Multinomial classification with %d classes: %s\n",
               n_classes, paste(class_levels, collapse = ", ")))
 
-  # single-predictor case now checked consistently up front (fixes a mismatch
-  # in the original code, where training branched on `univariate` alone but
-  # prediction extraction branched on `univariate || n_predictors == 1`)
-  is_univariate <- n_predictors == 1
 
   # ---- Function to calculate additional metrics ----
   calculate_multiclass_metrics <- function(data, lev = NULL, model = NULL) {
+    
+    missing_cols <- setdiff(lev, names(data))
+    if (length(missing_cols) > 0) {
+      for (m in missing_cols) data[[m]] <- 0
+    }
 
     y_true <- data$obs
     y_pred <- data$pred
@@ -71,7 +76,9 @@ train_multinomial_models <- function(
         AUPRC_Macro = NA_real_,
         AUPRC_Micro = NA_real_,
         Brier       = NA_real_,
-        StratBrier  = NA_real_
+        StratBrier  = NA_real_,
+        setNames(rep(NA_real_, length(lev)), paste0("AUC_",   lev)),
+        setNames(rep(NA_real_, length(lev)), paste0("AUPRC_", lev))
       ))
     }
 
@@ -116,6 +123,11 @@ train_multinomial_models <- function(
       }, error = function(e) NA_real_)
     }
 
+    
+    names(auc_per_class)   <- paste0("AUC_",   lev)
+    names(auprc_per_class) <- paste0("AUPRC_", lev)
+ 
+
     auc_macro   <- mean(auc_per_class,   na.rm = TRUE)
     auprc_macro <- mean(auprc_per_class, na.rm = TRUE)
 
@@ -145,8 +157,8 @@ train_multinomial_models <- function(
     for (k in seq_along(lev)) {
       y_true_matrix[, k] <- as.integer(y_true == lev[k])
     }
-    brier <- mean((y_proba - y_true_matrix)^2)
-
+    
+    brier <- mean(rowSums((y_proba - y_true_matrix)^2))
     brier_per_class <- numeric(length(lev))
     names(brier_per_class) <- lev
     for (k in seq_along(lev)) {
@@ -168,13 +180,20 @@ train_multinomial_models <- function(
       AUPRC_Macro = auprc_macro,
       AUPRC_Micro = auprc_micro,
       Brier       = brier,
-      StratBrier  = strat_brier
+      StratBrier  = strat_brier,
+      auc_per_class,
+      auprc_per_class
     )
   }
 
+  set.seed(42)
+  cv_index <- caret::createMultiFolds(model_data[[target]], k = 5, times = 10)
   # ---- Create trainControl ----
   multi_control <- caret::trainControl(
-    method          = "LOOCV",
+    method          = "repeatedcv",
+    number          = 5,
+    repeats         = 10,
+    index           = cv_index,
     summaryFunction = calculate_multiclass_metrics,
     classProbs      = TRUE,
     verboseIter     = FALSE,
@@ -197,7 +216,7 @@ train_multinomial_models <- function(
   # glmnet needs a design matrix with >= 2 columns
   if (n_predictors < 2) {
     cat("Training Multinomial GLM (single predictor)\n")
-    glmnet_model <- tryCatch({
+     set.seed(42); glmnet_model <- tryCatch({
       caret::train(
         as.formula(paste(target, "~ .")),
         data = model_data,
@@ -215,7 +234,7 @@ train_multinomial_models <- function(
 
   } else {
     cat("Training GLMnet\n")
-    glmnet_model <- tryCatch({
+     set.seed(42); glmnet_model <- tryCatch({
       caret::train(
         as.formula(paste(target, "~ .")),
         data = model_data,
@@ -236,7 +255,7 @@ train_multinomial_models <- function(
 
   # --- Random Forest (with permutation importance enabled) ---
   cat("Training Random Forest\n")
-  rf_model <- tryCatch({
+   set.seed(42); rf_model <- tryCatch({
     caret::train(
       as.formula(paste(target, "~ .")),
       data = model_data,
@@ -257,7 +276,7 @@ train_multinomial_models <- function(
 
   # --- XGBoost (multi:softprob objective auto-selected by caret for >2 classes) ---
   cat("Training XGBoost\n")
-  xgb_model <- tryCatch({
+   set.seed(42); xgb_model <- tryCatch({
     caret::train(
       as.formula(paste(target, "~ .")),
       data = model_data,
@@ -284,7 +303,7 @@ train_multinomial_models <- function(
   # --- PLS-DA ---
   max_ncomp <- min(10, n_predictors)
   cat("Training PLS-DA\n")
-  pls_model <- tryCatch({
+   set.seed(42); pls_model <- tryCatch({
     caret::train(
       as.formula(paste(target, "~ .")),
       data = model_data,
@@ -311,58 +330,79 @@ train_multinomial_models <- function(
   }
 
   all_predictions <- list()
-
   if (!is.null(glmnet_model)) {
     all_predictions$glmnet <- filter_to_best(glmnet_model$pred, glmnet_model$bestTune) %>%
-      dplyr::mutate(Model = "GLMnet")
+      dplyr::mutate(Model = "GLMnet", model_key = "glmnet")
   }
   if (!is.null(rf_model)) {
     all_predictions$rf <- filter_to_best(rf_model$pred, rf_model$bestTune) %>%
-      dplyr::mutate(Model = "Random Forest")
+      dplyr::mutate(Model = "Random Forest", model_key = "rf")
   }
   if (!is.null(xgb_model)) {
     all_predictions$xgb <- filter_to_best(xgb_model$pred, xgb_model$bestTune) %>%
-      dplyr::mutate(Model = "XGBoost")
+      dplyr::mutate(Model = "XGBoost", model_key = "xgb")
   }
   if (!is.null(pls_model)) {
     all_predictions$pls <- filter_to_best(pls_model$pred, pls_model$bestTune) %>%
-      dplyr::mutate(Model = "PLS-DA")
+      dplyr::mutate(Model = "PLS-DA", model_key = "pls")
   }
+
+
   combined_preds <- dplyr::bind_rows(all_predictions) %>%
-    dplyr::select(Model, rowIndex, obs, pred, dplyr::all_of(class_levels)) %>%
-    dplyr::rename(
-      obs_class  = obs,
-      pred_class = pred
-    )
+    dplyr::mutate(Rep = sub("^Fold[0-9]+\\.", "", Resample)) %>%
+    dplyr::select(model_key, Model, Resample, Rep, rowIndex, obs, pred,
+                  dplyr::all_of(class_levels)) %>%
+    dplyr::rename(obs_class = obs, pred_class = pred)
+
 
   # ---- Compute OOF Metrics ----
+    # ---- Compute OOF Metrics ----
   compute_metrics_wrapper <- function(df) {
-    data_for_calc <- df %>%
-      dplyr::rename(obs = obs_class, pred = pred_class)
-
-    result <- calculate_multiclass_metrics(
-      data  = data_for_calc,
-      lev   = class_levels,
-      model = NULL
-    )
+    data_for_calc <- df %>% dplyr::rename(obs = obs_class, pred = pred_class)
+    result <- calculate_multiclass_metrics(data = data_for_calc,
+                                           lev = class_levels, model = NULL)
     tibble::as_tibble(t(result))
   }
 
-  oof_metrics <- combined_preds %>%
-    dplyr::group_by(Model) %>%
+  # --- per-repeat metrics, then mean/sd across the 10 repeats ---
+  oof_by_rep <- combined_preds %>%
+    dplyr::group_by(model_key, Model, Rep) %>%
     dplyr::group_modify(~ compute_metrics_wrapper(.x)) %>%
     dplyr::ungroup()
 
-  coverage <- combined_preds %>%
-    dplyr::group_by(Model) %>%
-    dplyr::summarise(
-      n_predictions = dplyr::n(),
-      coverage = dplyr::n() / nrow(model_data),
-      .groups = "drop"
-    )
+  oof_metrics <- oof_by_rep %>%
+    dplyr::group_by(model_key, Model) %>%
+    dplyr::summarise(dplyr::across(
+      dplyr::where(is.numeric),
+      list(mean = ~mean(.x, na.rm = TRUE), sd = ~stats::sd(.x, na.rm = TRUE)),
+      .names = "{.col}_{.fn}"), .groups = "drop")
 
-  oof_metrics <- oof_metrics %>%
-    dplyr::left_join(coverage, by = "Model")
+  # --- pooled: average each patient's class probabilities over the 10 repeats ---
+  pooled_preds <- combined_preds %>%
+    dplyr::group_by(model_key, Model, rowIndex, obs_class) %>%
+    dplyr::summarise(dplyr::across(dplyr::all_of(class_levels),
+                                   ~mean(.x, na.rm = TRUE)), .groups = "drop")
+
+  prob_mat <- as.matrix(pooled_preds[, class_levels, drop = FALSE])
+  pooled_preds$pred_class <- factor(
+    class_levels[max.col(prob_mat, ties.method = "first")], levels = class_levels)
+
+  oof_pooled <- pooled_preds %>%
+    dplyr::group_by(model_key, Model) %>%
+    dplyr::group_modify(~ compute_metrics_wrapper(.x)) %>%
+    dplyr::ungroup() %>%
+    dplyr::rename_with(~paste0(.x, "_pooled"), -c(model_key, Model))
+
+  oof_metrics <- dplyr::left_join(oof_metrics, oof_pooled,
+                                  by = c("model_key", "Model"))
+
+  coverage <- combined_preds %>%
+    dplyr::group_by(model_key, Model) %>%
+    dplyr::summarise(n_predictions = dplyr::n(),
+                     coverage = dplyr::n() / (nrow(model_data) * 10),
+                     .groups = "drop")
+
+  oof_metrics <- dplyr::left_join(oof_metrics, coverage, by = c("model_key", "Model"))
 
   # ---- Compile and Return ----
    trained_models <- Filter(Negate(is.null),
@@ -371,11 +411,12 @@ train_multinomial_models <- function(
   return(list(
     models         = trained_models,
     predictions    = combined_preds,
-    oof_metrics    = oof_metrics,
     comparison     = oof_metrics,
     variables_used = variables,
     target_used    = target,
     metrics        = metrics,
-    method         = "LOOCV"
+    method         = "repeatedCV",
+    oof_by_rep     = oof_by_rep,
+    pooled_predictions = pooled_preds
   ))
 }

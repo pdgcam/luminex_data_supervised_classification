@@ -9,7 +9,7 @@ library(corrplot)
 
 ratio_df_IgG <- readRDS('Data/by_isotype/ratio_df_IgG.rds')
 
-ratio_df_IgG_gmean <- readRDS('Data/by_isotype_gmean/ratio_df_IgG.rds')
+ratio_df_IgG_gmean <- readRDS('Data/by_isotype_gm/ratio_df_IgG.rds')
 
 pcr_target <- c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV")
 
@@ -117,7 +117,7 @@ antigen_blocks <- list(
   "DIII (SHERPADES)"   = "SHERPADES"
 )
 
-res_list <- lapply(antigen_blocks, function(a) prep_data(ratio_df_IgG, a))
+res_list <- lapply(antigen_blocks, function(a) prep_data(ratio_df_IgG_gmean, a))
 
 all_ratios <- unlist(lapply(res_list, function(r) r$plot_data$ratio))
 x_lim <- c(min(all_ratios, na.rm = TRUE) * 0.8,
@@ -175,13 +175,31 @@ panels <- lapply(seq_along(antigen_blocks), function(i) {
 
 
 combined_igg_ratio_panel <- wrap_plots(panels, ncol = 1) 
+quartz()
+combined_igg_ratio_panel 
+
+dir.create("Results/Fig3_gmean", recursive = TRUE, showWarnings = FALSE)
+ggsave("Results/Fig3_gmean/ratio_histograms_IgG.png", combined_igg_ratio_panel,
+       width = 25, height = 13, dpi = 300)
 
 
-dir.create("Results/Fig3", recursive = TRUE, showWarnings = FALSE)
-ggsave("Results/Fig3/ratio_histograms_IgG.png", combined_igg_ratio_panel,
-       width = 23, height = 15, dpi = 300)
-
-
+ratio_long <- ratio_df_IgG_gmean %>%
+  # keep identifier columns; every other column is an antigen ratio
+  tidyr::pivot_longer(
+    cols      = -any_of(c("id_patient", "target", "isotype")),
+    names_to  = "antigen",
+    values_to = "ratio"
+  ) %>%
+  filter(!is.na(ratio)) %>%                       # avoid NA in sum(ratio > 1)
+  mutate(
+    isotype   = if ("isotype" %in% names(.)) isotype else "IgG",
+    antigen   = str_trim(antigen),
+    # virus = first token, e.g. "DENV2" from "DENV2 NS1" / "DENV2_NS1"
+    virus     = str_extract(antigen, "^[^ _]+"),
+    # component = everything after the first space/underscore
+    component = str_trim(str_remove(antigen, "^[^ _]+[ _]+"))
+  ) %>%
+  dplyr::select(id_patient, target, isotype, antigen, virus, component, ratio)
 
 # ---- Summary Nos : how many id_patient have ratio < 1 - mean thath post titre is greater than pre titre
 flavi_gt1_summary <- ratio_long %>%
@@ -230,7 +248,7 @@ colnames(ratio_df_IgG_gmean)
 names(ratio_df_IgG_gmean)[names(ratio_df_IgG_gmean) == "ZIKVAS_DIII"] <- "ZIKV_DIII"
 
 
-ratio_df_IgG_flavi <- ratio_df_IgG %>%
+ratio_df_IgG_flavi <- ratio_df_IgG_gmean %>%
     dplyr::select(all_of(flavi_antigens)) %>%
     as.data.frame()
 
