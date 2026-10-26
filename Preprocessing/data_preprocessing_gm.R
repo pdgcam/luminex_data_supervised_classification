@@ -23,6 +23,7 @@ library(tidyverse)
 library(standardize)
 
 
+
 # Functions
 convert_hai_to_numeric <- function(x) {
   case_when(
@@ -115,11 +116,9 @@ cebu_mutiple_antigens <- read_excel(here("Data/db_philippines_IgG_IgA_IgM_avidit
 cpc_gps <- read.csv(here("Data/CPC_GPS.csv"))
 
 
-
 # align patient IDs / PCR cols across datasets
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
-
 
 unique(cebu_mutiple_antigens$antigen)
 
@@ -135,6 +134,10 @@ cebu_pivot <- cebu_mutiple_antigens %>%
     names_from = antigen,
     values_from = RAU
   )
+
+View(cebu_pivot)
+table(cebu_pivot$PCR)
+
 
 
 # --- Add col: days_since_infection 
@@ -171,19 +174,21 @@ pcr_history <- cebu_pivot_days_since_inf %>%
     .groups = "drop"
   )
  
+
 dplyr::count(pcr_history, has_symptomatic_denv, has_symptomatic_chik)
+
 
 
 # isotype-long subsets
 no_denv_pcr  <- cebu_pivot_days_since_inf %>%
   semi_join(filter(pcr_history, !has_symptomatic_denv), by = "id_patient")
-View(no_denv_pcr)
 
 no_chikv_pcr <- cebu_pivot_days_since_inf %>%
   semi_join(filter(pcr_history, !has_symptomatic_chik), by = "id_patient")
  
 n_distinct(no_denv_pcr$id_patient)    # patients with no DENV +ve PCR during study 
 n_distinct(no_chikv_pcr$id_patient)   # patients with no CHIKV +ve PCR during study 
+
 
 
 # get one sample per patient for HAI and PRNT 
@@ -197,12 +202,12 @@ sample_per_patient <- function(df) {
     dplyr::distinct(id_patient, id_sample, date_sample, days_since_infection, PCR,
              HAI_DENV1, HAI_DENV2, HAI_DENV3, HAI_DENV4, PRNT_CHIKV)
  
-  # must be one row per sample, else titres disagree between isotype rows
+  # must be one row per sample
   dups <- out %>% dplyr::count(id_patient, id_sample) %>% filter(n > 1)
   if (nrow(dups) > 0) stop("Titres differ between isotype rows for ",
-                           nrow(dups), " sample(s); inspect before continuing.")
+                           nrow(dups), " patients.")
  
-  # a patient should not have two id_samples on the same date (breaks lag())
+  # one sample per patient per day (otherwise can't compute fold-rise)
   same_day <- out %>% dplyr::count(id_patient, date_sample) %>% filter(n > 1)
   if (nrow(same_day) > 0) warning(nrow(same_day), " patient-dates have >1 sample.")
  
@@ -214,6 +219,8 @@ sample_per_patient <- function(df) {
 denv_HAIs  <- sample_per_patient(no_denv_pcr)
 chik_PRNTs <- sample_per_patient(no_chikv_pcr)
 
+View(denv_HAIs)
+exists(".vsc.attach")
 
 # DENV Subclinicals 
 denv_subclinicals_df <- denv_HAIs %>%
