@@ -87,7 +87,7 @@ prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pr
 }
 
 # thresholds
-DENV_THRESHOLD <- log2(1.6)   # >=1.6 rise in mean log2 HAI between consecutive timepoints
+DENV_THRESHOLD <- log2(1.6)   # >=1.6 rise in mean log2 HAI between first and last sample
 CHIK_THRESHOLD <- log2(8)     # >=8-fold rise in PRNT vs enrolment baseline
 DENV_SEROTYPES <- c("DENV1", "DENV2", "DENV3", "DENV4")
 
@@ -120,7 +120,6 @@ cpc_gps <- read.csv(here("Data/CPC_GPS.csv"))
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
 length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 samples intersect
 
-unique(cebu_mutiple_antigens$antigen)
 
 # using ZIKVAS_DIII as ZIKV_DIII
 # for ZIKA NS1 using ZIKV_NS1 (not using - ZIKVSU_NS1)
@@ -214,16 +213,18 @@ sample_per_patient <- function(df) {
   out
 }
 
+denv_HAIs_no_denv_PCR  <- sample_per_patient(no_denv_pcr)
+chik_PRNTs_no_chikv_PCR <- sample_per_patient(no_chikv_pcr)
+
+View(denv_HAIs_no_denv_PCR %>%
+  dplyr::arrange(id_patient, date_sample))
+
+View(chik_PRNTs_no_chikv_PCR %>%
+  dplyr::arrange(id_patient, date_sample))
 
 
-denv_HAIs  <- sample_per_patient(no_denv_pcr)
-chik_PRNTs <- sample_per_patient(no_chikv_pcr)
-
-View(denv_HAIs)
-exists(".vsc.attach")
-
-# DENV Subclinicals 
-denv_subclinicals_df <- denv_HAIs %>%
+# DENV Subclinicals  - look at no_denv_pcr subset (patients with no symptomatic DENV infection during study)
+denv_subclinicals_df <- denv_HAIs_no_denv_PCR %>%
   arrange(id_patient, date_sample) %>%     # date_sample is always present
   group_by(id_patient) %>%
   mutate(
@@ -241,21 +242,42 @@ denv_subclinicals_df <- denv_HAIs %>%
       cbind(log_HI_DENV1, log_HI_DENV2, 
             log_HI_DENV3, log_HI_DENV4),
       na.rm = TRUE
-    ),
-    days_gap  = as.numeric(difftime(date_sample, lag(date_sample), units = "days")),
-    log_mean_HI_ratio_deng = mean_log_HI - lag(mean_log_HI),
- 
-    denv_subclinical = coalesce(log_mean_HI_ratio_deng >= DENV_THRESHOLD, FALSE)
+    ), 
+    has_HI = !is.na(mean_log_HI),
+
+    # GM (DENV1-4) < 10 at first sample (10 = 1 on the log2(x/5) scale)
+    enrollment_seroneg = first(mean_log_HI[has_HI]) < 1,
+    enrollment_serostatus = if_else(enrollment_seroneg, "seronegative", "seropositive"),
+
+    days_gap = as.numeric(difftime(last(date_sample[has_HI]),
+                                   first(date_sample[has_HI]),
+                                   units = "days")),
+     # last = first = fold-rise between first and last sample for each patient
+    log_mean_HI_ratio_deng = last(mean_log_HI[has_HI]) - first(mean_log_HI[has_HI]),
+    denv_status = case_when(
+    is.na(log_mean_HI_ratio_deng) | days_gap == 0                  ~ "insufficient_data",
+    enrollment_seroneg & log_mean_HI_ratio_deng < DENV_THRESHOLD   ~ "seronegative_no_rise", # start seronegative, no rise
+    enrollment_seroneg & log_mean_HI_ratio_deng >= DENV_THRESHOLD  ~ "seronegative_start_subclinical", # start seronegative, >=1.6-fold rise between first and last sample
+    log_mean_HI_ratio_deng >= DENV_THRESHOLD                       ~ "seropositive_start_subclinical", # start seropositive, >=1.6-fold rise between first and last sample
+    .default = "seropositive_no_rise" # start seropositive, no rise
+    )
   ) %>%
   ungroup() %>%
-  dplyr::select(id_patient, id_sample, mean_log_HI, date_sample,days_gap, 
-                log_mean_HI_ratio_deng, denv_subclinical)
+  dplyr::select(id_patient, id_sample, mean_log_HI, date_sample, days_gap, days_since_infection, PCR,
+                enrollment_serostatus, log_mean_HI_ratio_deng, denv_status)
 
-table(denv_subclinicals_df$denv_subclinical)
+
+denv_subclinicals_df %>%
+  dplyr::distinct(id_patient, denv_status) %>%
+  dplyr::count(denv_status)
+
+View(denv_subclinicals_df %>%
+  dplyr::arrange(id_patient, days_since_infection))
+
 
 
 # CHIKV subclincicals
-chik_baseline <- chik_PRNTs %>%
+chik_baseline <- chik_PRNTs_no_chikv_PCR %>%
   filter(!is.na(PRNT_CHIKV)) %>%
   group_by(id_patient) %>%
   slice_min(date_sample, n = 1, with_ties = FALSE) %>%
@@ -267,7 +289,7 @@ chik_baseline <- chik_PRNTs %>%
     baseline_days_chik  = days_since_infection
   )
  
-chik_subclinicals_df <- chik_PRNTs %>%
+chik_subclinicals_df <- chik_PRNTs_no_chikv_PCR %>%
   left_join(chik_baseline, by = "id_patient") %>%
   mutate(
     log_PRNT_CHIKV             = if_else(PRNT_CHIKV > 0, log_transform(PRNT_CHIKV), NA_real_),
@@ -290,14 +312,14 @@ table(chik_subclinicals_df$chik_subclinical)
 
 subclinical_samples <- full_join(
   denv_subclinicals_df %>%
-    filter(denv_subclinical) %>%
-    dplyr::select(id_patient, id_sample, days_gap,
-                  mean_log_HI, log_mean_HI_ratio_deng),
+    filter(denv_status %in% DENV_SUBCLINICAL) %>%
+    dplyr::distinct(id_patient, days_gap, denv_status,
+                  log_mean_HI_ratio_deng),
   chik_subclinicals_df %>%
     filter(chik_subclinical) %>%
-    dplyr::select(id_patient, id_sample, log_PRNT_CHIKV,
+    dplyr::distinct(id_patient, log_PRNT_CHIKV,
                   baseline_PRNT_CHIKV, log_fold_rise_chik),
-  by = c("id_patient", "id_sample")
+  by = c("id_patient")
 ) %>%
   mutate(
     reason = case_when(
@@ -305,27 +327,33 @@ subclinical_samples <- full_join(
       !is.na(log_mean_HI_ratio_deng)   ~ "subclinical_dengue",
       TRUE  ~ "subclinical_chik"
     ),
-    denv_fold_rise = 2^log_mean_HI_ratio_deng,   # human-readable
+    denv_fold_rise = 2^log_mean_HI_ratio_deng,   
     chik_fold_rise = 2^log_fold_rise_chik
   ) %>%
   left_join(
     cebu_pivot_days_since_inf %>%
-      distinct(id_patient, id_sample, date_sample, days_since_infection),
-    by = c("id_patient", "id_sample")
+      distinct(id_patient, date_sample, days_since_infection),
+    by = c("id_patient")
   ) %>%
   arrange(id_patient, date_sample)
  
 dplyr::count(subclinical_samples, reason)
 
+subclinical_samples %>%
+  dplyr::distinct(id_patient, reason) %>%
+  dplyr::count(reason)
+
+
 # remove subclinical samples 
 clean_data <- cebu_pivot_days_since_inf %>%
-  anti_join(subclinical_samples, by = c("id_patient", "id_sample"))
+  anti_join(subclinical_samples, by = c("id_patient"))
 
- 
 # rows removed should be n_excluded_samples * rows_per_sample
 nrow(cebu_pivot_days_since_inf) - nrow(clean_data)
 nrow(subclinical_samples)
 
+nrow(clean_data)  # 668 rows remain after removing subclinical samples
+length(unique(clean_data$id_patient))  # 31 patients remain after removing subclinical samples
 
 patient_pcr_mapping <- clean_data %>%
   group_by(id_patient) %>%
