@@ -1,6 +1,104 @@
 
 
 # ---- Forward selection with Random Forest only ----
+forward_selection_rf <- function(data, target, variables,
+                                 positive_class = NULL,
+                                 selection_metric = c("ROC", "ROC_mean_fold", "AUPRC", "Brier"),
+                                 max_vars = NULL,
+                                 min_improvement = 0,
+                                 cv_repeats = 10,
+                                 tune = TRUE) {
+  selection_metric <- match.arg(selection_metric)
+  variables <- unique(variables)
+  missing_cols <- setdiff(c(target, variables), names(data))
+  if (length(missing_cols) > 0) stop("Not found in data: ", paste(missing_cols, collapse = ", "))
+
+  # Drop incomplete rows once, so every candidate set uses the same rows and folds
+  keep <- complete.cases(data[, c(target, variables)])
+  if (any(!keep)) {
+    message("Dropping ", sum(!keep), " row(s) with missing values.")
+    data <- data[keep, , drop = FALSE]
+  }
+  groups <- if ("id_patient" %in% names(data)) data$id_patient else seq_len(nrow(data))
+  fold_index <- make_patient_folds(data[[target]], groups, repeats = cv_repeats)
+
+  # RF performance of one variable set. tune = FALSE uses one fixed setting (much faster).
+  score_set <- function(vars) {
+    grid <- if (tune) {
+      NULL
+    } else {
+      data.frame(
+        mtry = max(1, floor(sqrt(length(vars)))),
+        splitrule = "gini", min.node.size = 10
+      )
+    }
+    res <- suppressMessages(train_binary_models(
+      data, target, vars, positive_class,
+      fold_index = fold_index, which_models = "rf", rf_grid = grid
+    ))
+    res$comparison
+  }
+  sign <- if (selection_metric == "Brier") -1 else 1 # lower Brier is better
+
+  selected <- character(0)
+  best_so_far <- -Inf
+  steps <- candidates <- list()
+  n_steps <- if (is.null(max_vars)) length(variables) else min(max_vars, length(variables))
+
+  for (step in seq_len(n_steps)) {
+    remaining <- setdiff(variables, selected)
+    message(sprintf("Step %d: trying %d candidate(s)", step, length(remaining)))
+
+    comp <- do.call(rbind, lapply(remaining, function(v) {
+      data.frame(step = step, set_size = step, candidate_variable = v, score_set(c(selected, v)))
+    }))
+    candidates[[step]] <- comp
+
+    best <- comp[which.max(sign * comp[[selection_metric]]), ]
+    gain <- sign * best[[selection_metric]] - best_so_far
+    if (step > 1 && gain < min_improvement) {
+      message(sprintf("  Best gain %.4f < min_improvement - stopping.", gain))
+      break
+    }
+    best_so_far <- sign * best[[selection_metric]]
+    selected <- c(selected, best$candidate_variable)
+    message(sprintf(
+      "  + %s (%s = %.4f)", best$candidate_variable,
+      selection_metric, best[[selection_metric]]
+    ))
+
+    steps[[step]] <- data.frame(
+      best[c("step", "set_size")],
+      variable_added = best$candidate_variable,
+      selected_set   = paste(selected, collapse = " + "),
+      best[!names(best) %in% c("step", "set_size", "candidate_variable")]
+    )
+  }
+
+  list(
+    combined_steps = data.frame(target = target, do.call(rbind, steps), row.names = NULL),
+    combined_candidates = data.frame(target = target, do.call(rbind, candidates), row.names = NULL),
+    selected_vars = selected,
+    selection_metric_used = selection_metric,
+    fold_index = fold_index
+  )
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---- Forward selection with Random Forest only ----
 # Same logic as the original version; the only changes are:
 #   - each candidate is scored with train_binary_models(which_models = "rf")
 #   - folds are patient-grouped (make_patient_folds) instead of row-based

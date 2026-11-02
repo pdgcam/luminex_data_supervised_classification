@@ -1,10 +1,8 @@
-# --- Script for preprocessing data and visualising tire dynamics 
-# --- Preprocessing for cross-sectional samples 
-# mostly the same as data_preprocessing.R
-# but here we need to make sure to remove potetinal subclincals at the start of the study 
 
-# --- also here we are using geometric mean ratio across all four serotypes of DENV 
-#  Unless otherwise specified, we classified an interval as a no-infection event if this ratio was 1 or smaller. 
+# --- Preprocessing for cross-sectional samples 
+# mostly the same as data_preprocessing.R 
+# for cross-sectional question - keep only the last post infection draw 
+# but here we need to make sure to remove potetinal subclincals at the start of the study 
 
 
 
@@ -13,7 +11,6 @@ library(ggplot2)
 library(cowplot)
 library(RColorBrewer)
 library(matrixStats)
-library(stringr)
 library(data.table)
 library(dplyr)
 library(scales)
@@ -21,10 +18,7 @@ library(purrr)
 library(tidyr)
 library(stringr)
 library(here)
-library(exactextractr)
-library(raster)
 library(readxl)
-library(knitr)
 library(patchwork)
 library(tidyverse)
 library(standardize)
@@ -70,6 +64,9 @@ validation_subset <- read.csv(here("Data/MIA_DataBaseOut_ValidationSet.csv"))
 random_subset <- read.csv(here("Data/MIA_DataBaseOut_RandomSubset.csv"))
 cebu_mutiple_antigens <- read_excel(here("Data/db_philippines_IgG_IgA_IgM_avidity.xlsx"))
 cpc_gps <- read.csv(here("Data/CPC_GPS.csv"))
+
+View(validation_subset %>% arrange(ids))
+
 
 # align patient IDs / PCR cols across datasets
 cebu_mutiple_antigens$id_patient <- gsub("_", "-", cebu_mutiple_antigens$id_patient)
@@ -127,8 +124,7 @@ dplyr::count(pcr_history, has_symptomatic_denv, has_symptomatic_chik)
 
 
 
-# --- DENV Seronegative at baseline 
-
+# --- DENV Seronegative at enrollment  
 hai_cols <- c("HAI_DENV1", "HAI_DENV2", "HAI_DENV3", "HAI_DENV4")
 
 # one row per sample, with HAI status attached
@@ -138,17 +134,14 @@ sample_hai <- cebu_pivot_days_since_inf %>%
          hai_neg = if_all(all_of(hai_cols), ~ .x == "<10"))
 
 # patients whose EARLIEST sample is negative across all four serotypes
-flavi_baseline_neg_ids <- sample_hai %>%
-  group_by(id_patient) %>%
-  arrange(date_sample, .by_group = TRUE) %>%
-  slice(1) %>%
-  ungroup() %>%
-  filter(hai_neg) %>%
+flavi_enrollment_neg_ids <- sample_hai %>%
+  filter(days_since_infection < 0, hai_neg) %>%
+  distinct(id_patient) %>%
   pull(id_patient)
 
-length(flavi_baseline_neg_ids)
+length(flavi_enrollment_neg_ids)
 
-# ----- CHIKV Seronegative at baseline 
+# ----- CHIKV Seronegative at enrollment (PRNT < 10) 
 # one row per sample, with CHIKV PRNT status attached
 sample_prnt <- cebu_pivot_days_since_inf %>%
   distinct(id_sample, .keep_all = TRUE) %>%
@@ -156,7 +149,7 @@ sample_prnt <- cebu_pivot_days_since_inf %>%
          prnt_neg = PRNT_CHIKV == "<10")
 
 # patients whose EARLIEST sample is CHIKV PRNT negative
-alpha_baseline_neg_ids <- sample_prnt %>%
+alpha_enrollment_neg_ids <- sample_prnt %>%
   group_by(id_patient) %>%
   arrange(days_since_infection, date_sample, .by_group = TRUE) %>%
   slice(1) %>%
@@ -165,8 +158,7 @@ alpha_baseline_neg_ids <- sample_prnt %>%
   pull(id_patient)
 
 
-# --- patient mapping (PCRs)
-patient_pcr_mapping <- cebu_pivot_days_since_inf %>%
+patient_pcr_mapping <- clean_data %>%
   group_by(id_patient) %>%
   summarise(
     has_zikv   = any(PCR %in% "ZIKV"),
@@ -186,8 +178,6 @@ patient_pcr_mapping <- cebu_pivot_days_since_inf %>%
     )
   ) %>%
   dplyr::select(id_patient, target)
-
-table(patient_pcr_mapping$target)
 
 
 cebu_pivot_days_since_inf %>%
@@ -209,7 +199,7 @@ singletons <- cebu_pivot_days_since_inf %>%
 
 # --- build cross-sectional datasets 
 # --- positives == PCR confirmed infections 
-# --- negatives == baseline neg (flavi or alpha) 
+# --- negatives == enrollment neg (flavi or alpha) 
 
 build_cross_sectional_datasets <- function(dat, antigen_cols, pos_targets, neg_ids, iso,
                                pcr_mapping = patient_pcr_mapping) {
@@ -245,22 +235,23 @@ build_cross_sectional_datasets <- function(dat, antigen_cols, pos_targets, neg_i
 }
 
 flavi_IgG <- build_cross_sectional_datasets(cebu_pivot_days_since_inf, flavi_antigens,
-                                c(DENV_SEROTYPES, "ZIKV"), flavi_baseline_neg_ids, "IgG")
+                                c(DENV_SEROTYPES, "ZIKV"), flavi_enrollment_neg_ids, "IgG")
 flavi_IgA <- build_cross_sectional_datasets(cebu_pivot_days_since_inf, flavi_antigens,
-                                c(DENV_SEROTYPES, "ZIKV"), flavi_baseline_neg_ids, "IgA")
+                                c(DENV_SEROTYPES, "ZIKV"), flavi_enrollment_neg_ids, "IgA")
 flavi_IgM <- build_cross_sectional_datasets(cebu_pivot_days_since_inf, flavi_antigens,
-                                c(DENV_SEROTYPES, "ZIKV"), flavi_baseline_neg_ids, "IgM")
+                                c(DENV_SEROTYPES, "ZIKV"), flavi_enrollment_neg_ids, "IgM")
 
 alpha_IgG <- build_cross_sectional_datasets(cebu_pivot_days_since_inf, alpha_antigens,
-                                "CHIKV", alpha_baseline_neg_ids, "IgG")
+                                "CHIKV", alpha_enrollment_neg_ids, "IgG")
 alpha_IgA <- build_cross_sectional_datasets(cebu_pivot_days_since_inf, alpha_antigens,
-                                "CHIKV", alpha_baseline_neg_ids, "IgA")
+                                "CHIKV", alpha_enrollment_neg_ids, "IgA")
 alpha_IgM <- build_cross_sectional_datasets(cebu_pivot_days_since_inf, alpha_antigens,
-                                "CHIKV", alpha_baseline_neg_ids, "IgM")
+                                "CHIKV", alpha_enrollment_neg_ids, "IgM")
 
 
 nrow(flavi_IgG)
-View(flavi_IgG)
+nrow(alpha_IgG)
+
 
 #log10 
 log_antigens <- function(df, antigen_cols) {
@@ -276,6 +267,42 @@ alpha_IgG_log <- log_antigens(alpha_IgG, alpha_antigens)
 alpha_IgA_log <- log_antigens(alpha_IgA, alpha_antigens)
 alpha_IgM_log <- log_antigens(alpha_IgM, alpha_antigens)
 
+
+
+# --- Overlap in the input ID lists
+flavi_pcr_ids <- patient_pcr_mapping %>%
+  filter(target %in% c(DENV_SEROTYPES, "ZIKV")) %>%
+  distinct(id_patient) %>% pull(id_patient)
+
+alpha_pcr_ids <- patient_pcr_mapping %>%
+  filter(target == "CHIKV") %>%
+  distinct(id_patient) %>% pull(id_patient)
+
+length(intersect(flavi_enrollment_neg_ids, flavi_pcr_ids))
+length(intersect(alpha_enrollment_neg_ids, alpha_pcr_ids))
+
+# --- 2. Overlap in the finished datasets
+overlap_ids <- function(df) {
+  df %>%
+    group_by(id_patient) %>%
+    summarise(has_neg = any(target == "negative"),
+              has_pos = any(target != "negative"),
+              .groups = "drop") %>%
+    filter(has_neg, has_pos) %>%
+    pull(id_patient)
+}
+
+datasets <- list(flavi_IgG = flavi_IgG, flavi_IgA = flavi_IgA, flavi_IgM = flavi_IgM,
+                 alpha_IgG = alpha_IgG, alpha_IgA = alpha_IgA, alpha_IgM = alpha_IgM)
+
+purrr::imap_dfr(datasets, ~ tibble(
+  dataset    = .y,
+  n_rows     = nrow(.x),
+  n_patients = n_distinct(.x$id_patient),
+  n_neg      = sum(.x$target == "negative"),
+  n_pos      = sum(.x$target != "negative"),
+  n_both     = length(overlap_ids(.x))
+))
 
 
 saveRDS(flavi_IgG_log, "Data/by_isotype/flavi_cross_sectional_logged_IgG.rds")

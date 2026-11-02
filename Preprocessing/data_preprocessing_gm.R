@@ -40,15 +40,14 @@ log_transform <- function (titre) {
 }
 
 # --- post/pre dataset + cross-sectional dataset (remove any samples between day 0 and day 30)
-prepare_luminex_datasets <- function(raw_data, patient_mapping, antigen_cols, pre_threshold = -1, post_threshold = 30) {
+prepare_ratio_datasets <- function(raw_data, patient_mapping, antigen_cols, pre_threshold = -1, post_threshold = 30) {
   
   # Validate that antigen columns exist in the data
   missing_cols <- setdiff(antigen_cols, names(raw_data))
   if (length(missing_cols) > 0) {
     stop("Missing columns in data: ", paste(missing_cols, collapse = ", "))
   }
-
-
+    # removea any samples between day 0 and 30 
    # ---- Dataset 1: Post/Pre Ratio ----
   ratio_df <- raw_data %>%
   filter(days_since_infection != 0) %>%
@@ -177,7 +176,6 @@ pcr_history <- cebu_pivot_days_since_inf %>%
 dplyr::count(pcr_history, has_symptomatic_denv, has_symptomatic_chik)
 
 
-
 # isotype-long subsets
 no_denv_pcr  <- cebu_pivot_days_since_inf %>%
   semi_join(filter(pcr_history, !has_symptomatic_denv), by = "id_patient")
@@ -187,7 +185,6 @@ no_chikv_pcr <- cebu_pivot_days_since_inf %>%
  
 n_distinct(no_denv_pcr$id_patient)    # patients with no DENV +ve PCR during study 
 n_distinct(no_chikv_pcr$id_patient)   # patients with no CHIKV +ve PCR during study 
-
 
 
 # get one sample per patient for HAI and PRNT 
@@ -344,6 +341,33 @@ subclinical_samples %>%
   dplyr::count(reason)
 
 
+# make DENV (flavi) and CHIKV dataframe separately for downstream analysis
+# DENV subclincals can be used for CHIKV classification and visa versa 
+patient_analysis <- patient_pcr_mapping %>%
+  left_join(denv_subclinicals_df %>%
+              distinct(id_patient, denv_status), by = "id_patient") %>%
+  left_join(chik_subclinicals_df %>%
+              distinct(id_patient, chik_subclinical), by = "id_patient") %>%
+  mutate(
+    denv_case = target %in% DENV_SEROTYPES,
+    chik_case = target == "CHIKV",
+
+    # eligible as a DENV control only if no DENV subclinical evidence
+    denv_eligible = denv_case | !(denv_status %in% DENV_SUBCLINICAL),
+    chik_eligible = chik_case | !coalesce(chik_subclinical, FALSE)
+  )
+
+
+denv_df <- patient_analysis %>% filter(denv_eligible)
+chik_df <- patient_analysis %>% filter(chik_eligible)
+
+patient_analysis %>% count(denv_eligible, target)
+patient_analysis %>% count(chik_eligible, target)
+
+
+
+
+
 # remove subclinical samples 
 clean_data <- cebu_pivot_days_since_inf %>%
   anti_join(subclinical_samples, by = c("id_patient"))
@@ -353,7 +377,7 @@ nrow(cebu_pivot_days_since_inf) - nrow(clean_data)
 nrow(subclinical_samples)
 
 nrow(clean_data)  # 668 rows remain after removing subclinical samples
-length(unique(clean_data$id_patient))  # 31 patients remain after removing subclinical samples
+length(unique(clean_data$id_patient))  # 168 patients remain after removing subclinical samples
 
 patient_pcr_mapping <- clean_data %>%
   group_by(id_patient) %>%
@@ -396,8 +420,8 @@ preprocessed_by_isotype <- map(set_names(isotypes), function(iso) {
   log_iso <- raw_iso
   log_iso[antigen_cols] <- log10(log_iso[antigen_cols])
  
-  # ratios + cross-sectional built from UNLOGGED data
-  dfs <- prepare_luminex_datasets(raw_iso, patient_pcr_mapping,
+  # ratios built from unlogged data
+  dfs <- prepare_ratio_datasets(raw_iso, patient_pcr_mapping,
                                   antigen_cols, pre_threshold = -1, post_threshold = 30)
 
  
@@ -426,7 +450,7 @@ igm_ratio <- readRDS(file.path(out_dir, "ratio_df_IgM.rds"))
 
 
 
-
+head(igg_ratio)
 
 
 

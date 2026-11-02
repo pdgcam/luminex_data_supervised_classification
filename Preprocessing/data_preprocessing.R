@@ -21,8 +21,7 @@ library(patchwork)
 library(tidyverse)
 library(standardize)
 
-#--- source functions
-source(here('/Users/ap2488/Documents/GitHub/luminex_data_supervised_classification/Functions.R'))
+
 
 
 # Functions
@@ -155,6 +154,8 @@ cebu_pivot_days_since_inf <- cebu_pivot %>%
   ungroup() %>%
   dplyr::select(-first_positive_date, -first_negative_date)
 
+# censorted data?
+sapply(cebu_pivot_days_since_inf[, antigen_cols], max, na.rm = TRUE)
 
 
 # patients with no PCR sample at all -> days_since_infection is NA throughout
