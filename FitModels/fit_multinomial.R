@@ -1,7 +1,14 @@
+multinomial_targets    <- c("dengue_serotype", "dengue_serotype_neg")
+
+
+
+data_with_multinomial_targets_list    <- list(ratio = list(), cross_sectional = list())
 
 # Multinomial Classification 
 results_dengue_serotype_list   <- list(ratio = list(), cross_sectional = list())
 results_dengue_serotype_neg_list <- list(ratio = list(), cross_sectional = list())
+
+
 
 
 for (dataset_type in dataset_types) {
@@ -25,13 +32,20 @@ for (dataset_type in dataset_types) {
      # metrics = c("ROC", "AUPRC", "Brier", "StratBrier")
     #)
 
+    # ---- Multinomial: dengue serotypes ----
+  # Ratio
+  data_with_multinomial_targets_list$ratio[[iso]] <-
+    select_targets(source_dfs$ratio$denv[[iso]], targets = multinomial_targets)
+
+  # Cross-sectional (ZIKV shouldn't be "negative" in the serotype_neg model either)
+  res_cs_multi <- select_targets(src_cs_flavi, targets = multinomial_targets)
+  data_with_multinomial_targets_list$cross_sectional[[iso]] <-
+    drop_zikv_negatives(res_cs_multi, src_cs_flavi, targets = "dengue_serotype_neg")
+
     results_dengue_serotype_list[[dataset_type]][[isotype]]     <- results_dengue_serotype
     #results_dengue_serotype_neg_list[[dataset_type]][[isotype]] <- results_dengue_serotype_neg
   }
 }
-
-
-
 
 
 # save multinomial

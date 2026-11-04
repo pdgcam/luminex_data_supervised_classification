@@ -305,64 +305,12 @@ purrr::imap_dfr(datasets, ~ tibble(
 ))
 
 
-saveRDS(flavi_IgG_log, "Data/by_isotype/flavi_cross_sectional_logged_IgG.rds")
-saveRDS(flavi_IgA_log, "Data/by_isotype/flavi_cross_sectional_logged_IgA.rds")
-saveRDS(flavi_IgM_log, "Data/by_isotype/flavi_cross_sectional_logged_IgM.rds")
-saveRDS(alpha_IgG_log, "Data/by_isotype/alpha_cross_sectional_logged_IgG.rds")
-saveRDS(alpha_IgA_log, "Data/by_isotype/alpha_cross_sectional_logged_IgA.rds")
-saveRDS(alpha_IgM_log, "Data/by_isotype/alpha_cross_sectional_logged_IgM.rds")
+saveRDS(flavi_IgG_log, "Data/by_isotype_cross_sectional/flavi_cross_sectional_logged_IgG.rds")
+saveRDS(flavi_IgA_log, "Data/by_isotype_cross_sectional/flavi_cross_sectional_logged_IgA.rds")
+saveRDS(flavi_IgM_log, "Data/by_isotype_cross_sectional/flavi_cross_sectional_logged_IgM.rds")
+saveRDS(alpha_IgG_log, "Data/by_isotype_cross_sectional/alpha_cross_sectional_logged_IgG.rds")
+saveRDS(alpha_IgA_log, "Data/by_isotype_cross_sectional/alpha_cross_sectional_logged_IgA.rds")
+saveRDS(alpha_IgM_log, "Data/by_isotype_cross_sectional/alpha_cross_sectional_logged_IgM.rds")
 
 
 
-
-
-
-flavi_baseline_neg <- cebu_pivot_days_since_inf %>%
-  filter(id_patient %in% baseline_neg_ids,
-         isotype %in% c("IgG", "IgA", "IgM")) %>%
-  left_join(dplyr::select(sample_hai, id_sample, hai_neg), by = "id_sample") %>%
-  pivot_longer(all_of(flavi_antigens),
-               names_to = "antigen", values_to = "RAU") %>%
-  filter(!is.na(RAU)) %>%
-  mutate(
-    isotype = factor(isotype, levels = c("IgG", "IgA", "IgM")),
-    target = case_when(
-      grepl("^SHERPADES_", antigen) ~ "DIII (SHERPADES)",
-      grepl("_DIII$", antigen)      ~ "DIII",
-      grepl("_NS1$", antigen)       ~ "NS1",
-      grepl("_VLP$", antigen)       ~ "VLP",
-      grepl("_E$|_E2$", antigen)    ~ "E",
-      TRUE                          ~ "other"
-    )
-  ) %>%
-  arrange(id_patient, antigen, days_since_infection)
-
-View(flavi_baseline_neg)
-
-plot_flavi_traj <- function(dat, iso, ids = NULL) {
-
-  stopifnot(all(c("days_since_infection", "RAU", "target",
-                  "antigen", "isotype", "id_patient") %in% names(dat)))
-
-  d <- dplyr::filter(dat, isotype == iso)
-  if (!is.null(ids)) d <- dplyr::filter(d, id_patient %in% ids)
-  if (nrow(d) == 0) stop("No rows for isotype ", iso)
-
-  n_pat <- dplyr::n_distinct(d$id_patient)
-
-  ggplot(d, aes(.data$days_since_infection, .data$RAU,
-                colour = .data$target, group = .data$antigen)) +
-    geom_line(linewidth = 0.3, alpha = 0.7) +
-    geom_point(size = 0.7) +
-    facet_wrap(~ id_patient, ncol = min(8, n_pat)) +
-    scale_y_log10() +
-    labs(x = "Days since infection", y = paste0("Flavivirus ", iso, " (RAU)"),
-         title = paste0(iso, " — HAI <10 across DENV1-4 at baseline (n = ", n_pat, ")")) +
-    theme_minimal(base_size = 8) +
-    theme(panel.grid.minor = element_blank(),
-          strip.text = element_text(face = "bold", size = 7),
-          legend.position = "bottom")
-}
-
-quartz()
-plot_flavi_traj(flavi_baseline_neg, "IgG", ids = baseline_neg_ids)

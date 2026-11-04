@@ -21,7 +21,7 @@ library(knitr)
 library(patchwork)
 library(tidyverse)
 library(standardize)
-
+library(readxl)
 
 
 # Functions
@@ -86,7 +86,8 @@ prepare_ratio_datasets <- function(raw_data, patient_mapping, antigen_cols, pre_
 }
 
 # thresholds
-DENV_THRESHOLD <- log2(1.6)   # >=1.6 rise in mean log2 HAI between first and last sample
+#DENV_THRESHOLD <- log2(1.6)   # >=1.6 rise in mean log2 HAI between first and last sample
+DENV_THRESHOLD <- 1.6 # is it 1.6 or log2(1.6) - need to check??!!
 CHIK_THRESHOLD <- log2(8)     # >=8-fold rise in PRNT vs enrolment baseline
 DENV_SEROTYPES <- c("DENV1", "DENV2", "DENV3", "DENV4")
 
@@ -125,17 +126,12 @@ length(intersect(validation_subset$ids, cebu_mutiple_antigens$id_patient)) #39 s
 cebu_mutiple_antigens <- cebu_mutiple_antigens %>%
   mutate(antigen = dplyr::recode(antigen, "ZIKVAS_DIII" = "ZIKV_DIII"))
 
-
 # pivot to get RAU as main data
 cebu_pivot <- cebu_mutiple_antigens %>%
   pivot_wider(
     names_from = antigen,
     values_from = RAU
   )
-
-View(cebu_pivot)
-table(cebu_pivot$PCR)
-
 
 
 # --- Add col: days_since_infection 
@@ -171,8 +167,6 @@ pcr_history <- cebu_pivot_days_since_inf %>%
     has_symptomatic_chik = any(PCR %in% "CHIKV"),
     .groups = "drop"
   )
- 
-
 dplyr::count(pcr_history, has_symptomatic_denv, has_symptomatic_chik)
 
 
@@ -213,64 +207,49 @@ sample_per_patient <- function(df) {
 denv_HAIs_no_denv_PCR  <- sample_per_patient(no_denv_pcr)
 chik_PRNTs_no_chikv_PCR <- sample_per_patient(no_chikv_pcr)
 
-View(denv_HAIs_no_denv_PCR %>%
-  dplyr::arrange(id_patient, date_sample))
-
-View(chik_PRNTs_no_chikv_PCR %>%
-  dplyr::arrange(id_patient, date_sample))
-
 
 # DENV Subclinicals  - look at no_denv_pcr subset (patients with no symptomatic DENV infection during study)
 denv_subclinicals_df <- denv_HAIs_no_denv_PCR %>%
-  arrange(id_patient, date_sample) %>%     # date_sample is always present
+  arrange(id_patient, date_sample) %>%
   group_by(id_patient) %>%
   mutate(
-    # --- log transform HI
-    log_HI_DENV1 = if_else(HAI_DENV1 > 0 ,log_transform(HAI_DENV1), 
-                                 NA_real_),
-    log_HI_DENV2 = if_else(HAI_DENV2 > 0, log_transform(HAI_DENV2), 
-                                 NA_real_),
-    log_HI_DENV3 = if_else(HAI_DENV3 > 0, log_transform(HAI_DENV3), 
-                                 NA_real_),
-    log_HI_DENV4 = if_else(HAI_DENV4 > 0 ,log_transform(HAI_DENV4), 
-                                 NA_real_),
-     # --- mean across serotypes 
+    log_HI_DENV1 = if_else(HAI_DENV1 > 0, log_transform(HAI_DENV1), NA_real_),
+    log_HI_DENV2 = if_else(HAI_DENV2 > 0, log_transform(HAI_DENV2), NA_real_),
+    log_HI_DENV3 = if_else(HAI_DENV3 > 0, log_transform(HAI_DENV3), NA_real_),
+    log_HI_DENV4 = if_else(HAI_DENV4 > 0, log_transform(HAI_DENV4), NA_real_),
+
     mean_log_HI = rowMeans(
-      cbind(log_HI_DENV1, log_HI_DENV2, 
-            log_HI_DENV3, log_HI_DENV4),
+      cbind(log_HI_DENV1, log_HI_DENV2, log_HI_DENV3, log_HI_DENV4),
       na.rm = TRUE
-    ), 
+    ),
+    # all-NA rows come back as NaN, not NA - make that explicit
+    mean_log_HI = if_else(is.nan(mean_log_HI), NA_real_, mean_log_HI),
     has_HI = !is.na(mean_log_HI),
 
-    # GM (DENV1-4) < 10 at first sample (10 = 1 on the log2(x/5) scale)
-    enrollment_seroneg = first(mean_log_HI[has_HI]) < 1,
+    first_log_HI = dplyr::first(mean_log_HI[has_HI], default = NA_real_),
+    last_log_HI  = dplyr::last(mean_log_HI[has_HI],  default = NA_real_),
+
+    enrollment_seroneg    = first_log_HI < 1,
     enrollment_serostatus = if_else(enrollment_seroneg, "seronegative", "seropositive"),
 
-    days_gap = as.numeric(difftime(last(date_sample[has_HI]),
-                                   first(date_sample[has_HI]),
-                                   units = "days")),
-     # last = first = fold-rise between first and last sample for each patient
-    log_mean_HI_ratio_deng = last(mean_log_HI[has_HI]) - first(mean_log_HI[has_HI]),
+    first_HI_date = dplyr::first(date_sample[has_HI], default = as.Date(NA)),
+    last_HI_date  = dplyr::last(date_sample[has_HI],  default = as.Date(NA)),
+    days_gap      = as.numeric(difftime(last_HI_date, first_HI_date, units = "days")),
+
+    log_mean_HI_ratio_deng = last_log_HI - first_log_HI,
+
     denv_status = case_when(
-    is.na(log_mean_HI_ratio_deng) | days_gap == 0                  ~ "insufficient_data",
-    enrollment_seroneg & log_mean_HI_ratio_deng < DENV_THRESHOLD   ~ "seronegative_no_rise", # start seronegative, no rise
-    enrollment_seroneg & log_mean_HI_ratio_deng >= DENV_THRESHOLD  ~ "seronegative_start_subclinical", # start seronegative, >=1.6-fold rise between first and last sample
-    log_mean_HI_ratio_deng >= DENV_THRESHOLD                       ~ "seropositive_start_subclinical", # start seropositive, >=1.6-fold rise between first and last sample
-    .default = "seropositive_no_rise" # start seropositive, no rise
+      is.na(log_mean_HI_ratio_deng) | is.na(days_gap) | days_gap == 0 ~ "insufficient_data",
+      enrollment_seroneg & log_mean_HI_ratio_deng <  DENV_THRESHOLD   ~ "seronegative_no_rise",
+      enrollment_seroneg & log_mean_HI_ratio_deng >= DENV_THRESHOLD   ~ "seronegative_start_subclinical",
+      log_mean_HI_ratio_deng >= DENV_THRESHOLD                        ~ "seropositive_start_subclinical",
+      .default = "seropositive_no_rise"
     )
   ) %>%
   ungroup() %>%
-  dplyr::select(id_patient, id_sample, mean_log_HI, date_sample, days_gap, days_since_infection, PCR,
-                enrollment_serostatus, log_mean_HI_ratio_deng, denv_status)
-
-
-denv_subclinicals_df %>%
-  dplyr::distinct(id_patient, denv_status) %>%
-  dplyr::count(denv_status)
-
-View(denv_subclinicals_df %>%
-  dplyr::arrange(id_patient, days_since_infection))
-
+  dplyr::select(id_patient, id_sample, mean_log_HI, date_sample, days_gap,
+                days_since_infection, PCR, enrollment_serostatus,
+                log_mean_HI_ratio_deng, denv_status)
 
 
 # CHIKV subclincicals
@@ -307,90 +286,36 @@ table(chik_subclinicals_df$chik_subclinical)
 
 
 
-subclinical_samples <- full_join(
-  denv_subclinicals_df %>%
-    filter(denv_status %in% DENV_SUBCLINICAL) %>%
-    dplyr::distinct(id_patient, days_gap, denv_status,
-                  log_mean_HI_ratio_deng),
-  chik_subclinicals_df %>%
-    filter(chik_subclinical) %>%
-    dplyr::distinct(id_patient, log_PRNT_CHIKV,
-                  baseline_PRNT_CHIKV, log_fold_rise_chik),
-  by = c("id_patient")
-) %>%
-  mutate(
-    reason = case_when(
-      !is.na(log_mean_HI_ratio_deng) & !is.na(log_fold_rise_chik) ~ "subclinical_deng_chik",
-      !is.na(log_mean_HI_ratio_deng)   ~ "subclinical_dengue",
-      TRUE  ~ "subclinical_chik"
-    ),
-    denv_fold_rise = 2^log_mean_HI_ratio_deng,   
-    chik_fold_rise = 2^log_fold_rise_chik
-  ) %>%
-  left_join(
-    cebu_pivot_days_since_inf %>%
-      distinct(id_patient, date_sample, days_since_infection),
-    by = c("id_patient")
-  ) %>%
-  arrange(id_patient, date_sample)
- 
-dplyr::count(subclinical_samples, reason)
 
-subclinical_samples %>%
-  dplyr::distinct(id_patient, reason) %>%
-  dplyr::count(reason)
+DENV_SUBCLINICAL <- c("seronegative_start_subclinical", "seropositive_start_subclinical")
+FLAVI_TARGETS <- c(DENV_SEROTYPES, "ZIKV")
+
+# --- patient-level subclinical flags (one row per patient) ---
+denv_subclinical_ids <- denv_subclinicals_df %>%
+  filter(denv_status %in% DENV_SUBCLINICAL) %>%
+  distinct(id_patient) %>%
+  pull(id_patient)
+
+chik_subclinical_ids <- chik_subclinicals_df %>%
+  filter(chik_subclinical) %>%
+  distinct(id_patient) %>%
+  pull(id_patient)
+
+length(denv_subclinical_ids)
+length(chik_subclinical_ids)
+length(intersect(denv_subclinical_ids, chik_subclinical_ids))
 
 
-# make DENV (flavi) and CHIKV dataframe separately for downstream analysis
-# DENV subclincals can be used for CHIKV classification and visa versa 
-patient_analysis <- patient_pcr_mapping %>%
-  left_join(denv_subclinicals_df %>%
-              distinct(id_patient, denv_status), by = "id_patient") %>%
-  left_join(chik_subclinicals_df %>%
-              distinct(id_patient, chik_subclinical), by = "id_patient") %>%
-  mutate(
-    denv_case = target %in% DENV_SEROTYPES,
-    chik_case = target == "CHIKV",
-
-    # eligible as a DENV control only if no DENV subclinical evidence
-    denv_eligible = denv_case | !(denv_status %in% DENV_SUBCLINICAL),
-    chik_eligible = chik_case | !coalesce(chik_subclinical, FALSE)
-  )
-
-
-denv_df <- patient_analysis %>% filter(denv_eligible)
-chik_df <- patient_analysis %>% filter(chik_eligible)
-
-patient_analysis %>% count(denv_eligible, target)
-patient_analysis %>% count(chik_eligible, target)
-
-
-
-
-
-# remove subclinical samples 
-clean_data <- cebu_pivot_days_since_inf %>%
-  anti_join(subclinical_samples, by = c("id_patient"))
-
-# rows removed should be n_excluded_samples * rows_per_sample
-nrow(cebu_pivot_days_since_inf) - nrow(clean_data)
-nrow(subclinical_samples)
-
-nrow(clean_data)  # 668 rows remain after removing subclinical samples
-length(unique(clean_data$id_patient))  # 168 patients remain after removing subclinical samples
-
-patient_pcr_mapping <- clean_data %>%
+patient_pcr_mapping <- cebu_pivot_days_since_inf %>%
   group_by(id_patient) %>%
   summarise(
-    has_zikv   = any(PCR %in% "ZIKV"),
-    has_chikv  = any(PCR %in% "CHIKV"),
-    has_denv   = any(PCR %in% DENV_SEROTYPES),
-    # first DENV serotype specifically (not just the first PCR of any virus)
-    denv_pcr   = first(c(na.omit(PCR[PCR %in% DENV_SEROTYPES]), NA_character_)),
+    has_zikv  = any(PCR %in% "ZIKV"),
+    has_chikv = any(PCR %in% "CHIKV"),
+    has_denv  = any(PCR %in% DENV_SEROTYPES),
+    denv_pcr  = first(c(na.omit(PCR[PCR %in% DENV_SEROTYPES]), NA_character_)),
     .groups = "drop"
   ) %>%
   mutate(
-    # subclinical samples are already gone, so "no PCR+ of any virus" = negative
     target = case_when(
       has_zikv  ~ "ZIKV",
       has_denv  ~ denv_pcr,
@@ -400,62 +325,91 @@ patient_pcr_mapping <- clean_data %>%
   ) %>%
   dplyr::select(id_patient, target)
 
-table(patient_pcr_mapping$target)
-target_counts <- as.data.frame(table(patient_pcr_mapping$target))
-colnames(target_counts) <- c("Target", "Count")
+print(table(patient_pcr_mapping$target))
+
+target_counts <- patient_pcr_mapping %>%
+  dplyr::count(target) %>%
+  dplyr::mutate(
+    target = factor(target, levels = c("DENV1", "DENV2", "DENV3", "DENV4", "ZIKV", "CHIKV", "negative"))
+  ) %>%
+  arrange(target)
+print(target_counts)
 
 # save counts per target 
 write.csv(target_counts, "Results/target_counts.csv", row.names = FALSE)
 
 
-out_dir <- "Data/by_isotype_gm"
-dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+denv_data <- cebu_pivot_days_since_inf %>%
+  left_join(patient_pcr_mapping, by = "id_patient") %>%
+  filter(target %in% DENV_SEROTYPES | !(id_patient %in% denv_subclinical_ids))
+
+chik_data <- cebu_pivot_days_since_inf %>%
+  left_join(patient_pcr_mapping, by = "id_patient") %>%
+  filter(target == "CHIKV" | !(id_patient %in% chik_subclinical_ids))
+
+denv_vs_chik_data <- cebu_pivot_days_since_inf %>%
+  left_join(patient_pcr_mapping, by = "id_patient") %>%
+  filter(
+    (target %in% DENV_SEROTYPES | !(id_patient %in% denv_subclinical_ids)) &
+    (target == "CHIKV"          | !(id_patient %in% chik_subclinical_ids))
+  )
 
 
-# geometric mean ratios 
-preprocessed_by_isotype <- map(set_names(isotypes), function(iso) {
- 
-  raw_iso <- clean_data %>% filter(isotype == iso)
- 
-  log_iso <- raw_iso
-  log_iso[antigen_cols] <- log10(log_iso[antigen_cols])
- 
-  # ratios built from unlogged data
-  dfs <- prepare_ratio_datasets(raw_iso, patient_pcr_mapping,
-                                  antigen_cols, pre_threshold = -1, post_threshold = 30)
 
- 
-  logged_ratio <- dfs$ratio
-  logged_ratio[antigen_cols] <- log10(logged_ratio[antigen_cols])
+purrr::imap(
+  list(denv = denv_data, chik = chik_data, denv_vs_chik = denv_vs_chik_data),
+  ~ tibble(set = .y, n_rows = nrow(.x), n_patients = n_distinct(.x$id_patient))
+) %>% bind_rows()
+
+denv_data %>% dplyr::distinct(id_patient, target) %>% dplyr::count(target)
+chik_data %>% dplyr::distinct(id_patient, target) %>% dplyr::count(target)
+denv_vs_chik_data %>% dplyr::distinct(id_patient, target) %>% dplyr::count(target)
 
 
-  write.csv(raw_iso, sprintf("%s/raw_preprocessed_cebu_%s.csv", out_dir, iso),    row.names = FALSE)
-  write.csv(log_iso, sprintf("%s/logged_preprocessed_cebu_%s.csv", out_dir, iso), row.names = FALSE)
 
-  saveRDS(dfs$ratio,  sprintf("%s/ratio_df_%s.rds", out_dir, iso))
-  saveRDS(logged_ratio,  sprintf("%s/logged_ratio_df_%s.rds", out_dir, iso))
+base_out_dir <- "Data/by_isotype_gm"
 
+analysis_sets <- list(
+  denv         = denv_data,
+  chik         = chik_data,
+  denv_vs_chik = denv_vs_chik_data
+)
 
-  list(raw = raw_iso, log = log_iso,
-       ratio = dfs$ratio, logged_ratio = logged_ratio)
+preprocessed_by_set <- purrr::imap(analysis_sets, function(set_data, set_name) {
+
+  out_dir <- file.path(base_out_dir, set_name)
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+  by_isotype <- purrr::map(rlang::set_names(isotypes), function(iso) {
+
+    raw_iso <- set_data %>% dplyr::filter(isotype == iso)
+
+    log_iso <- raw_iso
+    log_iso[antigen_cols] <- log10(log_iso[antigen_cols])
+
+    dfs <- prepare_ratio_datasets(
+      raw_iso, patient_pcr_mapping, antigen_cols,
+      pre_threshold = -1, post_threshold = 30
+    )
+
+    logged_ratio <- dfs$ratio
+    logged_ratio[antigen_cols] <- log10(logged_ratio[antigen_cols])
+
+    write.csv(raw_iso, sprintf("%s/raw_preprocessed_cebu_%s.csv", out_dir, iso),
+              row.names = FALSE)
+    write.csv(log_iso, sprintf("%s/logged_preprocessed_cebu_%s.csv", out_dir, iso),
+              row.names = FALSE)
+
+    saveRDS(dfs$ratio,    sprintf("%s/ratio_df_%s.rds", out_dir, iso))
+    saveRDS(logged_ratio, sprintf("%s/logged_ratio_df_%s.rds", out_dir, iso))
+
+    list(raw = raw_iso, log = log_iso,
+         ratio = dfs$ratio, logged_ratio = logged_ratio)
+  })
+
+  saveRDS(by_isotype, file.path(out_dir, "preprocessed_by_isotype.rds"))
+  by_isotype
 })
 
-saveRDS(preprocessed_by_isotype, file.path(out_dir, "preprocessed_by_isotype.rds"))
- 
-
-igg_ratio <- readRDS(file.path(out_dir, "ratio_df_IgG.rds"))
-iga_ratio <- readRDS(file.path(out_dir, "ratio_df_IgA.rds"))
-igm_ratio <- readRDS(file.path(out_dir, "ratio_df_IgM.rds"))
-
-
-
-
-head(igg_ratio)
-
-
-
-
-
-
-
-
+saveRDS(preprocessed_by_set, file.path(base_out_dir, "preprocessed_by_set.rds"))

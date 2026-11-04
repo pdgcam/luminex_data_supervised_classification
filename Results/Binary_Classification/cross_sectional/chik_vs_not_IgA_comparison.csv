@@ -1,0 +1,4 @@
+"model_key","Model","ROC_pooled","ROC_pooled_low","ROC_pooled_high","AUPRC_pooled","Brier_pooled","ROC_mean_fold","ROC_sd_fold","ROC_mean_fold_low","ROC_mean_fold_high","AUPRC_mean_fold","Brier_mean_fold","n_folds_used","ROC_pooled_ci_method"
+"glmnet","GLMnet",1,1,1,0.909090909090909,0.166139088059417,1,0,1,1,0.496666666666667,0.165652509618126,50,"DeLong"
+"rf","Random Forest",1,1,1,0.909090909090909,0.0313318172367115,1,0,1,1,0.533333333333333,0.0316374407016722,50,"DeLong"
+"naive_bayes","Naive Bayes",0.990909090909091,0.970512940534831,1,0.616133866133866,0.209181819464886,0.992222222222222,0.0238359641550495,0.967323839248011,1,0.408055555555556,0.250563831639884,50,"DeLong"
